@@ -96,10 +96,10 @@ var BABYLONX;
             this.objectStoreName_ = payload.objectStoreName;
             this.openDatabase(payload.dbName, payload.dbVersion, false, function (db) {
                 if (!db) {
-                    postMessage({ error: BABYLONX.WorkerErrorType.NO_INDEXEDDB }, undefined);
+                    postMessage({ error: 1 /* NO_INDEXEDDB */ }, undefined);
                 }
                 else {
-                    postMessage({ error: BABYLONX.WorkerErrorType.SUCCESS }, undefined);
+                    postMessage({ error: 0 /* SUCCESS */ }, undefined);
                 }
                 _this.indexedDb_ = db;
                 _this.getAllMeshes(function (meshes) {
@@ -129,7 +129,7 @@ var BABYLONX;
                 collidedMeshUniqueId: collider.collidedMesh,
                 collisionId: payload.collisionId,
                 newPosition: finalPosition.asArray(),
-                error: BABYLONX.WorkerErrorType.SUCCESS
+                error: 0 /* SUCCESS */
             };
             postMessage(reply, undefined);
         };
@@ -160,7 +160,7 @@ var BABYLONX;
             var cursorRequest = store.openCursor();
             cursorRequest.onerror = function (error) {
                 console.log(error);
-                postMessage({ error: BABYLONX.WorkerErrorType.TRANSACTION_FAILED }, undefined);
+                postMessage({ error: 2 /* TRANSACTION_FAILED */ }, undefined);
             };
             cursorRequest.onsuccess = function (evt) {
                 var cursor = evt.target['result'];
@@ -180,7 +180,7 @@ var BABYLONX;
             var request = indexedDB.open(dbName, dbVersion);
             request.onerror = function (e) {
                 console.log(e);
-                postMessage({ error: BABYLONX.WorkerErrorType.TRANSACTION_FAILED }, undefined);
+                postMessage({ error: 2 /* TRANSACTION_FAILED */ }, undefined);
             };
             request.onsuccess = function (event) {
                 var openedDb = event.target['result'];
@@ -194,13 +194,13 @@ var BABYLONX;
     BABYLONX.onNewMessage = function (event) {
         var message = event.data;
         switch (message.taskType) {
-            case BABYLONX.WorkerTaskType.OPEN_DB:
+            case 0 /* OPEN_DB */:
                 collisionDetector.onOpenDatabaseMessage(message.payload);
                 break;
-            case BABYLONX.WorkerTaskType.COLLIDE:
+            case 1 /* COLLIDE */:
                 collisionDetector.onCollideMessage(message.payload);
                 break;
-            case BABYLONX.WorkerTaskType.DB_UPDATE:
+            case 2 /* DB_UPDATE */:
                 collisionDetector.onUpdateDatabaseMessage(message.payload);
                 break;
         }
