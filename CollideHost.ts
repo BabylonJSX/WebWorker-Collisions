@@ -28,7 +28,7 @@ module BABYLONX {
 
             this._indexedDBPersist.onDatabaseUpdated = (meshes) => {
                 var payload: BABYLONX.UpdateDatabasePayload = {
-                    updatedMeshes: meshes 
+                    updatedMeshes: meshes
                 };
                 var message: BABYLONX.BabylonMessage = {
                     payload: payload,
@@ -40,6 +40,10 @@ module BABYLONX {
             this._sendOpenDBMessage();
 
             this._worker.onmessage = this._onMessageFromWorker
+        }
+
+        public isInitialized() {
+            return !!this._init;
         }
 
         private initSceneFunctions() {
@@ -60,7 +64,7 @@ module BABYLONX {
                             radius: collider.radius.asArray()
                         },
                         collisionId: collisionId,
-                        excludedMeshUniqueId: null,//excludedMesh['uniqueId'],
+                        excludedMeshUniqueId: excludedMesh ? excludedMesh['uniqueId'] : null,
                         maximumRetry: maximumRetry
                     };
                     var message: BABYLONX.BabylonMessage = {
@@ -84,30 +88,50 @@ module BABYLONX {
                 globalPosition.subtractFromFloatsToRef(0, this.ellipsoid.y, 0, this._oldPosition);
                 this._collider.radius = this.ellipsoid;
 
-                this.getScene()._getNewPosition(this._oldPosition, velocity, this._collider, 3, null, null,(newPosition: BABYLON.Vector3, collidedMesh: BABYLON.AbstractMesh) => {
-                    this._newPosition.copyFrom(newPosition);
-                    this._newPosition.multiplyInPlace(this._collider.radius);
-                    this._newPosition.subtractToRef(this._oldPosition, this._diffPosition);
+                this.getScene()._getNewPosition(this._oldPosition, velocity, this._collider, 3, null, null,
+                    (newPosition: BABYLON.Vector3, collidedMesh: BABYLON.AbstractMesh) => {
+                        this._newPosition.copyFrom(newPosition);
+                        this._newPosition.multiplyInPlace(this._collider.radius);
+                        this._newPosition.subtractToRef(this._oldPosition, this._diffPosition);
 
-                    if (this._diffPosition.length() > BABYLON.Engine.CollisionsEpsilon) {
-                        this.position.addInPlace(this._diffPosition);
-                        if (this.onCollide) {
-                            this.onCollide(this._collider.collidedMesh);
+                        if (this._diffPosition.length() > BABYLON.Engine.CollisionsEpsilon) {
+                            this.position.addInPlace(this._diffPosition);
+                            if (this.onCollide) {
+                                this.onCollide(this._collider.collidedMesh);
+                            }
                         }
-                    }
-                    //console.timeEnd("webworker");
-                });
+                        //console.timeEnd("webworker");
+                    });
 
             }
 
+            BABYLON.AbstractMesh.prototype.moveWithCollisions = function (velocity: BABYLON.Vector3): void {
+                var globalPosition = this.getAbsolutePosition();
+
+                globalPosition.subtractFromFloatsToRef(0, this.ellipsoid.y, 0, this._oldPositionForCollisions);
+                this._oldPositionForCollisions.addInPlace(this.ellipsoidOffset);
+                this._collider.radius = this.ellipsoid;
+
+                this.getScene()._getNewPosition(this._oldPositionForCollisions, velocity, this._collider, 3, null, this,
+                    (newPosition: BABYLON.Vector3, collidedMesh: BABYLON.AbstractMesh) => {
+                        this._newPositionForCollisions.copyFrom(newPosition);
+                        this._newPositionForCollisions.multiplyInPlace(this._collider.radius);
+                        this._newPositionForCollisions.subtractToRef(this._oldPositionForCollisions, this._diffPositionForCollisions);
+
+                        if (this._diffPositionForCollisions.length() > BABYLON.Engine.CollisionsEpsilon) {
+                            this.position.addInPlace(this._diffPositionForCollisions);
+                        }
+                    });
+            }
         }
 
         private _onMessageFromWorker = (e: MessageEvent) => {
             var returnData = <BABYLONX.CollisionReply> e.data;
             if (returnData.error == WorkerErrorType.NO_INDEXEDDB) {
                 console.log("no indexeddb, fallback to normal collision detection");
+                this._init = true;
                 return;
-            } 
+            }
             if (!this._init) {
                 console.log("webworker initialized");
                 this.initSceneFunctions();
@@ -115,7 +139,7 @@ module BABYLONX {
             }
             if (!returnData.collisionId) return;
 
-            this._scene['colliderQueue'][returnData.collisionId](BABYLON.Vector3.FromArray(returnData.newPosition), null);
+            this._scene['colliderQueue'][returnData.collisionId](BABYLON.Vector3.FromArray(returnData.newPosition), this._scene['getMeshByUniqueID'](returnData.collidedMeshUniqueId));
             //cleanup
             this._scene['colliderQueue'][returnData.collisionId] = undefined;
         }

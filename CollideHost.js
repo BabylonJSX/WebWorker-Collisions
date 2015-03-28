@@ -9,6 +9,7 @@ var BABYLONX;
                 var returnData = e.data;
                 if (returnData.error == 1 /* NO_INDEXEDDB */) {
                     console.log("no indexeddb, fallback to normal collision detection");
+                    _this._init = true;
                     return;
                 }
                 if (!_this._init) {
@@ -18,7 +19,7 @@ var BABYLONX;
                 }
                 if (!returnData.collisionId)
                     return;
-                _this._scene['colliderQueue'][returnData.collisionId](BABYLON.Vector3.FromArray(returnData.newPosition), null);
+                _this._scene['colliderQueue'][returnData.collisionId](BABYLON.Vector3.FromArray(returnData.newPosition), _this._scene['getMeshByUniqueID'](returnData.collidedMeshUniqueId));
                 _this._scene['colliderQueue'][returnData.collisionId] = undefined;
             };
             this._scene['collisionIndex'] = 0;
@@ -43,6 +44,9 @@ var BABYLONX;
             this._sendOpenDBMessage();
             this._worker.onmessage = this._onMessageFromWorker;
         }
+        CollisionHost.prototype.isInitialized = function () {
+            return !!this._init;
+        };
         CollisionHost.prototype.initSceneFunctions = function () {
             BABYLON.Scene.prototype._getNewPosition = function (position, velocity, collider, maximumRetry, finalPosition, excludedMesh, onNewPosition) {
                 if (excludedMesh === void 0) { excludedMesh = null; }
@@ -59,7 +63,7 @@ var BABYLONX;
                             radius: collider.radius.asArray()
                         },
                         collisionId: collisionId,
-                        excludedMeshUniqueId: null,
+                        excludedMeshUniqueId: excludedMesh ? excludedMesh['uniqueId'] : null,
                         maximumRetry: maximumRetry
                     };
                     var message = {
@@ -89,6 +93,21 @@ var BABYLONX;
                         if (_this.onCollide) {
                             _this.onCollide(_this._collider.collidedMesh);
                         }
+                    }
+                });
+            };
+            BABYLON.AbstractMesh.prototype.moveWithCollisions = function (velocity) {
+                var _this = this;
+                var globalPosition = this.getAbsolutePosition();
+                globalPosition.subtractFromFloatsToRef(0, this.ellipsoid.y, 0, this._oldPositionForCollisions);
+                this._oldPositionForCollisions.addInPlace(this.ellipsoidOffset);
+                this._collider.radius = this.ellipsoid;
+                this.getScene()._getNewPosition(this._oldPositionForCollisions, velocity, this._collider, 3, null, this, function (newPosition, collidedMesh) {
+                    _this._newPositionForCollisions.copyFrom(newPosition);
+                    _this._newPositionForCollisions.multiplyInPlace(_this._collider.radius);
+                    _this._newPositionForCollisions.subtractToRef(_this._oldPositionForCollisions, _this._diffPositionForCollisions);
+                    if (_this._diffPositionForCollisions.length() > BABYLON.Engine.CollisionsEpsilon) {
+                        _this.position.addInPlace(_this._diffPositionForCollisions);
                     }
                 });
             };
