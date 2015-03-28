@@ -1,4 +1,3 @@
-//load the babylon scripts.
 var window = {};
 importScripts("vendor/babylon.2.1-alpha.debug.js");
 importScripts("CollideHost.js");
@@ -15,14 +14,13 @@ var BABYLONX;
         }
         CollideWorker.prototype.collideWithWorld = function (position, velocity, maximumRetry, excludedMeshUniqueId) {
             var closeDistance = BABYLON.Engine.CollisionsEpsilon * 10.0;
-            //is initializing here correct? A quick look - looks like it is fine.
             if (this.collider.retry >= maximumRetry) {
                 this.finalPosition.copyFrom(position);
                 return;
             }
             this.collider._initialize(position, velocity, closeDistance);
             for (var uniqueId in this.meshes_) {
-                if (this.meshes_.hasOwnProperty(uniqueId) && uniqueId != excludedMeshUniqueId) {
+                if (this.meshes_.hasOwnProperty(uniqueId) && parseInt(uniqueId) != excludedMeshUniqueId) {
                     var mesh = this.meshes_[uniqueId];
                     if (mesh.checkCollisions)
                         this.checkCollision(mesh);
@@ -36,7 +34,6 @@ var BABYLONX;
                 this.collider._getResponse(position, velocity);
             }
             if (velocity.length() <= closeDistance) {
-                console.log("webworker collision with " + this.collider.collidedMesh);
                 this.finalPosition.copyFrom(position);
                 return;
             }
@@ -48,18 +45,15 @@ var BABYLONX;
                 return;
             }
             ;
-            // Transformation matrix
             BABYLON.Matrix.ScalingToRef(1.0 / this.collider.radius.x, 1.0 / this.collider.radius.y, 1.0 / this.collider.radius.z, this.collisionsScalingMatrix);
             var worldFromCache = BABYLON.Matrix.FromArray(mesh.worldMatrixFromCache);
             worldFromCache.multiplyToRef(this.collisionsScalingMatrix, this.collisionTranformationMatrix);
             this.processCollisionsForSubMeshes(this.collisionTranformationMatrix, mesh);
-            //return colTransMat;
         };
         CollideWorker.prototype.processCollisionsForSubMeshes = function (transformMatrix, mesh) {
             var len;
             for (var index = 0; index < mesh.subMeshes.length; index++) {
                 var subMesh = mesh.subMeshes[index];
-                // Bounding test
                 if (len > 1 && !this.checkSubmeshCollision(subMesh))
                     continue;
                 subMesh['getMesh'] = function () {
@@ -85,11 +79,8 @@ var BABYLONX;
             subMesh['getMaterial'] = function () {
                 return true;
             };
-            //}
-            // Collide
             this.collider._collide(subMesh, subMesh['_lastColliderWorldVertices'], indices, subMesh.indexStart, subMesh.indexStart + subMesh.indexCount, subMesh.verticesStart);
         };
-        //TODO - this! :-)
         CollideWorker.prototype.checkSubmeshCollision = function (subMesh) {
             return true;
         };
@@ -104,12 +95,17 @@ var BABYLONX;
             var _this = this;
             this.objectStoreName_ = payload.objectStoreName;
             this.openDatabase(payload.dbName, payload.dbVersion, false, function (db) {
+                if (!db) {
+                    postMessage({ error: BABYLONX.WorkerErrorType.NO_INDEXEDDB }, undefined);
+                }
+                else {
+                    postMessage({ error: BABYLONX.WorkerErrorType.SUCCESS }, undefined);
+                }
                 _this.indexedDb_ = db;
                 _this.getAllMeshes(function (meshes) {
                     meshes.forEach(function (mesh) {
                         _this.meshes_[mesh.uniqueId] = mesh;
                     });
-                    console.log(_this.meshes_);
                 });
             });
         };
@@ -121,12 +117,10 @@ var BABYLONX;
                 meshes.forEach(function (mesh) {
                     _this.meshes_[mesh.uniqueId] = mesh;
                 });
-                console.log(meshes);
             });
         };
         CollisionDetector.prototype.onCollideMessage = function (payload) {
             var finalPosition = BABYLON.Vector3.Zero();
-            //create a new collider
             var collider = new BABYLON.Collider();
             collider.radius = BABYLON.Vector3.FromArray(payload.collider.radius);
             var colliderWorker = new CollideWorker(collider, this.meshes_, finalPosition);
@@ -134,17 +128,16 @@ var BABYLONX;
             var reply = {
                 collidedMeshUniqueId: collider.collidedMesh,
                 collisionId: payload.collisionId,
-                newPosition: finalPosition.asArray()
+                newPosition: finalPosition.asArray(),
+                error: BABYLONX.WorkerErrorType.SUCCESS
             };
-            postMessage(reply, null);
+            postMessage(reply, undefined);
         };
-        //This is sadly impossible in a single query!
         CollisionDetector.prototype.getSpecificMeshes = function (meshesToFetch, callback) {
             var trans = this.indexedDb_.transaction([this.objectStoreName_]);
             var store = trans.objectStore(this.objectStoreName_);
             var meshes = [];
             trans.oncomplete = function (evt) {
-                console.log("transaction finished", meshes.length);
                 callback(meshes);
             };
             var fetchObject = function (key) {
@@ -167,6 +160,7 @@ var BABYLONX;
             var cursorRequest = store.openCursor();
             cursorRequest.onerror = function (error) {
                 console.log(error);
+                postMessage({ error: BABYLONX.WorkerErrorType.TRANSACTION_FAILED }, undefined);
             };
             cursorRequest.onsuccess = function (evt) {
                 var cursor = evt.target['result'];
@@ -177,12 +171,16 @@ var BABYLONX;
             };
         };
         CollisionDetector.prototype.openDatabase = function (dbName, dbVersion, deleteDatabase, successCallback) {
+            if (!indexedDB) {
+                successCallback(null);
+            }
             if (deleteDatabase) {
                 indexedDB.deleteDatabase(dbName);
             }
             var request = indexedDB.open(dbName, dbVersion);
             request.onerror = function (e) {
                 console.log(e);
+                postMessage({ error: BABYLONX.WorkerErrorType.TRANSACTION_FAILED }, undefined);
             };
             request.onsuccess = function (event) {
                 var openedDb = event.target['result'];
@@ -196,17 +194,16 @@ var BABYLONX;
     BABYLONX.onNewMessage = function (event) {
         var message = event.data;
         switch (message.taskType) {
-            case 0 /* OPEN_DB */:
+            case BABYLONX.WorkerTaskType.OPEN_DB:
                 collisionDetector.onOpenDatabaseMessage(message.payload);
                 break;
-            case 1 /* COLLIDE */:
+            case BABYLONX.WorkerTaskType.COLLIDE:
                 collisionDetector.onCollideMessage(message.payload);
                 break;
-            case 2 /* DB_UPDATE */:
+            case BABYLONX.WorkerTaskType.DB_UPDATE:
                 collisionDetector.onUpdateDatabaseMessage(message.payload);
                 break;
         }
     };
 })(BABYLONX || (BABYLONX = {}));
 onmessage = BABYLONX.onNewMessage;
-//# sourceMappingURL=CollideWorker.js.map

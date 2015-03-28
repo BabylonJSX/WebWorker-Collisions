@@ -32,7 +32,7 @@ module BABYLONX {
             // Check all meshes
 
             for (var uniqueId in this.meshes_) {
-                if (this.meshes_.hasOwnProperty(uniqueId) && uniqueId != excludedMeshUniqueId) {
+                if (this.meshes_.hasOwnProperty(uniqueId) && parseInt(uniqueId) != excludedMeshUniqueId) {
                     var mesh: SerializedMesh = this.meshes_[uniqueId];
                     if(mesh.checkCollisions)
                         this.checkCollision(mesh);
@@ -49,7 +49,7 @@ module BABYLONX {
             }
 
             if (velocity.length() <= closeDistance) {
-                console.log("webworker collision with " + this.collider.collidedMesh);
+                //console.log("webworker collision with " + this.collider.collidedMesh);
                 this.finalPosition.copyFrom(position);
                 return;
             }
@@ -144,12 +144,17 @@ module BABYLONX {
         public onOpenDatabaseMessage(payload: OpenDatabasePayload) {
             this.objectStoreName_ = payload.objectStoreName;
             this.openDatabase(payload.dbName, payload.dbVersion, false,(db) => {
+                //indexedDB not available
+                if (!db) {
+                    postMessage({ error: WorkerErrorType.NO_INDEXEDDB }, undefined);
+                } else {
+                    postMessage({ error: WorkerErrorType.SUCCESS }, undefined);
+                }
                 this.indexedDb_ = db;
                 this.getAllMeshes((meshes) => {
                     meshes.forEach((mesh) => {
                         this.meshes_[mesh.uniqueId] = mesh;
                     });
-                    console.log(this.meshes_);
                 });
             });
         }
@@ -160,7 +165,6 @@ module BABYLONX {
                 meshes.forEach((mesh) => {
                     this.meshes_[mesh.uniqueId] = mesh;
                 });
-                console.log(meshes);
             });
         }
 
@@ -175,10 +179,11 @@ module BABYLONX {
             var reply: CollisionReply = {
                 collidedMeshUniqueId: <any> collider.collidedMesh,
                 collisionId: payload.collisionId,
-                newPosition: finalPosition.asArray()
+                newPosition: finalPosition.asArray(),
+                error: WorkerErrorType.SUCCESS
             }
 
-            postMessage(reply, null);
+            postMessage(reply, undefined);
         }
 
         
@@ -190,7 +195,7 @@ module BABYLONX {
             var meshes = [];
 
             trans.oncomplete = function (evt) {
-                console.log("transaction finished", meshes.length);
+                //console.log("transaction finished", meshes.length);
                 callback(meshes);
             };
 
@@ -219,6 +224,7 @@ module BABYLONX {
 
             cursorRequest.onerror = function (error) {
                 console.log(error);
+                postMessage({ error: WorkerErrorType.TRANSACTION_FAILED }, undefined);
             };
 
             cursorRequest.onsuccess = function (evt) {
@@ -231,6 +237,11 @@ module BABYLONX {
         }
 
         private openDatabase(dbName: string, dbVersion: number, deleteDatabase: boolean, successCallback: (db: IDBDatabase) => void) {
+            //check for support!
+            if (!indexedDB) {
+                //return a null database
+                successCallback(null);
+            }
             if (deleteDatabase) {
                 indexedDB.deleteDatabase(dbName);
             }
@@ -238,6 +249,7 @@ module BABYLONX {
 
             request.onerror = function (e: ErrorEvent) {
                 console.log(e);
+                postMessage({ error: WorkerErrorType.TRANSACTION_FAILED }, undefined);
             }
 
             request.onsuccess = function (event: Event) {
