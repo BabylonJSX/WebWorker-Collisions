@@ -18,6 +18,11 @@ module BABYLONX {
 
             this._indexedDBPersist = new BABYLONX['IndexedDBPersist'](scene);
 
+            //Detect if worker is available.
+            if (!Worker) {
+                return;
+            }
+
             this._worker = new Worker("CollideWorker.js");
             worker = this._worker;
 

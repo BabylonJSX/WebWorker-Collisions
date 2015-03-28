@@ -25,6 +25,9 @@ var BABYLONX;
             this._scene['colliderQueue'] = [];
             this._init = false;
             this._indexedDBPersist = new BABYLONX['IndexedDBPersist'](scene);
+            if (!Worker) {
+                return;
+            }
             this._worker = new Worker("CollideWorker.js");
             worker = this._worker;
             this._indexedDBPersist.onDatabaseUpdated = function (meshes) {
