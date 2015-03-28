@@ -73,8 +73,14 @@ window.onload = () => {
 
             //Simple crate
             var box = BABYLON.Mesh.CreateBox("crate", 2, scene);
-            var material2 = new BABYLON.StandardMaterial("Mat", scene);
-            box.position = new BABYLON.Vector3(5, -9, -10);
+            var material2 = new BABYLON.StandardMaterial("groundMat", scene);
+            material2.diffuseColor = new BABYLON.Color3(1, 0, 0);
+            box.material = material2;
+            box.position = new BABYLON.Vector3(5, -9, -9);
+
+            //Simple crate
+            var box2 = BABYLON.Mesh.CreateBox("crate2", 2, scene);
+            box2.position = new BABYLON.Vector3(0, -9, -10);
 
             //Set gravity for the scene (G force like, on Y-axis)
             scene.gravity = new BABYLON.Vector3(0, -0.9, 0);
@@ -84,7 +90,7 @@ window.onload = () => {
 
             //Then apply collisions and gravity to the active camera
             camera.checkCollisions = true;
-            camera.applyGravity = true;
+            //camera.applyGravity = true;
 
             //Set the ellipsoid around the camera (e.g. your player's size)
             camera.ellipsoid = new BABYLON.Vector3(1, 1, 1);
@@ -99,11 +105,13 @@ window.onload = () => {
 
     scene = createScene2();
     scene.collisionsEnabled = true;
-    scene.debugLayer.show();
+    //scene.debugLayer.show();
 
     scene.meshes.forEach(function (m) {
         m.checkCollisions = true;
     });
+
+    
 
     engine.runRenderLoop(function () {
         scene.render();
@@ -122,4 +130,11 @@ window.onload = () => {
     //}
 
     var collisionHost = new BABYLONX.CollisionHost(scene);
+
+    scene.beforeRender = function () {
+        if (collisionHost.isInitialized()) {
+            var mesh = scene.getMeshByName("crate2");
+            mesh.moveWithCollisions(new BABYLON.Vector3(0.1, 0, 0));
+        }
+    }
 };
