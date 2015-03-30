@@ -19,7 +19,7 @@ var BABYLONX;
                 }
                 if (!returnData.collisionId)
                     return;
-                _this._scene['colliderQueue'][returnData.collisionId](BABYLON.Vector3.FromArray(returnData.newPosition), _this._scene['getMeshByUniqueID'](returnData.collidedMeshUniqueId));
+                _this._scene['colliderQueue'][returnData.collisionId](BABYLON.Vector3.FromArray(returnData.newPosition), _this._scene.getMeshByUniqueID(returnData.collidedMeshUniqueId));
                 _this._scene['colliderQueue'][returnData.collisionId] = undefined;
             };
             this._scene['collisionIndex'] = 0;
@@ -31,9 +31,10 @@ var BABYLONX;
             }
             this._worker = new Worker("CollideWorker.js");
             worker = this._worker;
-            this._indexedDBPersist.onDatabaseUpdated = function (meshes) {
+            this._indexedDBPersist.onDatabaseUpdated = function (meshes, geometries) {
                 var payload = {
-                    updatedMeshes: meshes
+                    updatedMeshes: meshes,
+                    updatedGeometries: geometries
                 };
                 var message = {
                     payload: payload,
@@ -52,7 +53,6 @@ var BABYLONX;
                 if (excludedMesh === void 0) { excludedMesh = null; }
                 position.divideToRef(collider.radius, this._scaledPosition);
                 velocity.divideToRef(collider.radius, this._scaledVelocity);
-                this['collisionIndex'] = this['collisionIndex'] % 1000;
                 var collisionId = this['collisionIndex']++;
                 this['colliderQueue'][collisionId] = onNewPosition;
                 if (worker) {
@@ -116,7 +116,8 @@ var BABYLONX;
             var openDbPayload = {
                 dbName: "babylonJsMeshes",
                 dbVersion: 1,
-                objectStoreName: "meshes"
+                objectStoreNameMeshes: "meshes",
+                objectStoreNameGeometries: "geometries"
             };
             var message = {
                 payload: openDbPayload,

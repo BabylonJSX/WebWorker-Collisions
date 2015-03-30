@@ -26,9 +26,10 @@ module BABYLONX {
             this._worker = new Worker("CollideWorker.js");
             worker = this._worker;
 
-            this._indexedDBPersist.onDatabaseUpdated = (meshes) => {
+            this._indexedDBPersist.onDatabaseUpdated = (meshes, geometries) => {
                 var payload: BABYLONX.UpdateDatabasePayload = {
-                    updatedMeshes: meshes
+                    updatedMeshes: meshes,
+                    updatedGeometries: geometries
                 };
                 var message: BABYLONX.BabylonMessage = {
                     payload: payload,
@@ -51,7 +52,7 @@ module BABYLONX {
                 position.divideToRef(collider.radius, this._scaledPosition);
                 velocity.divideToRef(collider.radius, this._scaledVelocity);
 
-                this['collisionIndex'] = this['collisionIndex'] % 1000;
+                //this['collisionIndex'] = this['collisionIndex'] % 1000;
 
                 var collisionId = this['collisionIndex']++;
                 this['colliderQueue'][collisionId] = onNewPosition;
@@ -139,7 +140,7 @@ module BABYLONX {
             }
             if (!returnData.collisionId) return;
 
-            this._scene['colliderQueue'][returnData.collisionId](BABYLON.Vector3.FromArray(returnData.newPosition), this._scene['getMeshByUniqueID'](returnData.collidedMeshUniqueId));
+            this._scene['colliderQueue'][returnData.collisionId](BABYLON.Vector3.FromArray(returnData.newPosition), this._scene.getMeshByUniqueID(returnData.collidedMeshUniqueId));
             //cleanup
             this._scene['colliderQueue'][returnData.collisionId] = undefined;
         }
@@ -148,7 +149,8 @@ module BABYLONX {
             var openDbPayload: BABYLONX.OpenDatabasePayload = {
                 dbName: "babylonJsMeshes",
                 dbVersion: 1,
-                objectStoreName: "meshes"
+                objectStoreNameMeshes: "meshes",
+                objectStoreNameGeometries: "geometries"
             };
             var message: BABYLONX.BabylonMessage = {
                 payload: openDbPayload,
@@ -162,8 +164,7 @@ module BABYLONX {
         id: string;
         name: string;
         uniqueId: number;
-        indices: Array<number>;
-        positions: Array<number>;
+        geometryId: string;
         sphereCenter: Array<number>;
         sphereRadius: number;
         boxMinimum: Array<number>;
@@ -179,6 +180,14 @@ module BABYLONX {
         verticesCount: number;
         indexStart: number;
         indexCount: number;
+    }
+
+    export interface SerializedGeometry {
+        id: string;
+        positions: Array<number>;
+        indices: Array<number>;
+        normals: Array<number>;
+        uvs?: Array<number>;
     }
 
     export interface BabylonMessage {
@@ -202,7 +211,8 @@ module BABYLONX {
     export interface OpenDatabasePayload {
         dbName: string;
         dbVersion: number;
-        objectStoreName: string;
+        objectStoreNameMeshes: string;
+        objectStoreNameGeometries: string;
     }
 
     export interface CollidePayload {
@@ -214,6 +224,7 @@ module BABYLONX {
 
     export interface UpdateDatabasePayload {
         updatedMeshes: Array<number>;
+        updatedGeometries: Array<string>;
     }
 
     export enum WorkerTaskType {
