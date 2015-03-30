@@ -4,10 +4,36 @@ importScripts("CollideHost.js");
 console.log("loading worker");
 var BABYLONX;
 (function (BABYLONX) {
+    var CollisionCache = (function () {
+        function CollisionCache() {
+            this._meshes = {};
+            this._geometries = {};
+        }
+        CollisionCache.prototype.getMeshes = function () {
+            return this._meshes;
+        };
+        CollisionCache.prototype.getGeometries = function () {
+            return this._geometries;
+        };
+        CollisionCache.prototype.getMesh = function (id) {
+            return this._meshes[id];
+        };
+        CollisionCache.prototype.addMesh = function (mesh) {
+            this._meshes[mesh.uniqueId] = mesh;
+        };
+        CollisionCache.prototype.getGeometry = function (id) {
+            return this._geometries[id];
+        };
+        CollisionCache.prototype.addGeometry = function (geometry) {
+            this._geometries[geometry.id] = geometry;
+        };
+        return CollisionCache;
+    })();
+    BABYLONX.CollisionCache = CollisionCache;
     var CollideWorker = (function () {
-        function CollideWorker(collider, meshes_, finalPosition) {
+        function CollideWorker(collider, _collisionCache, finalPosition) {
             this.collider = collider;
-            this.meshes_ = meshes_;
+            this._collisionCache = _collisionCache;
             this.finalPosition = finalPosition;
             this.collisionsScalingMatrix = BABYLON.Matrix.Zero();
             this.collisionTranformationMatrix = BABYLON.Matrix.Zero();
@@ -19,9 +45,10 @@ var BABYLONX;
                 return;
             }
             this.collider._initialize(position, velocity, closeDistance);
-            for (var uniqueId in this.meshes_) {
-                if (this.meshes_.hasOwnProperty(uniqueId) && parseInt(uniqueId) != excludedMeshUniqueId) {
-                    var mesh = this.meshes_[uniqueId];
+            var meshes = this._collisionCache.getMeshes();
+            for (var uniqueId in meshes) {
+                if (meshes.hasOwnProperty(uniqueId) && parseInt(uniqueId) != excludedMeshUniqueId) {
+                    var mesh = meshes[uniqueId];
                     if (mesh.checkCollisions)
                         this.checkCollision(mesh);
                 }
@@ -52,6 +79,15 @@ var BABYLONX;
         };
         CollideWorker.prototype.processCollisionsForSubMeshes = function (transformMatrix, mesh) {
             var len;
+            if (!mesh.geometryId) {
+                console.log("no mesh geometry id");
+                return;
+            }
+            var meshGeometry = this._collisionCache.getGeometry(mesh.geometryId);
+            if (!meshGeometry) {
+                console.log("couldn't find geometry", mesh.geometryId);
+                return;
+            }
             for (var index = 0; index < mesh.subMeshes.length; index++) {
                 var subMesh = mesh.subMeshes[index];
                 if (len > 1 && !this.checkSubmeshCollision(subMesh))
@@ -59,13 +95,13 @@ var BABYLONX;
                 subMesh['getMesh'] = function () {
                     return mesh.uniqueId;
                 };
-                this.collideForSubMesh(subMesh, transformMatrix, mesh.indices, mesh.positions);
+                this.collideForSubMesh(subMesh, transformMatrix, meshGeometry);
             }
         };
-        CollideWorker.prototype.collideForSubMesh = function (subMesh, transformMatrix, indices, positions) {
+        CollideWorker.prototype.collideForSubMesh = function (subMesh, transformMatrix, meshGeometry) {
             var positionsArray = [];
-            for (var i = 0; i < positions.length; i = i + 3) {
-                var p = BABYLON.Vector3.FromArray([positions[i], positions[i + 1], positions[i + 2]]);
+            for (var i = 0; i < meshGeometry.positions.length; i = i + 3) {
+                var p = BABYLON.Vector3.FromArray([meshGeometry.positions[i], meshGeometry.positions[i + 1], meshGeometry.positions[i + 2]]);
                 positionsArray.push(p);
             }
             subMesh['_lastColliderTransformMatrix'] = transformMatrix.clone();
@@ -79,7 +115,7 @@ var BABYLONX;
             subMesh['getMaterial'] = function () {
                 return true;
             };
-            this.collider._collide(subMesh, subMesh['_lastColliderWorldVertices'], indices, subMesh.indexStart, subMesh.indexStart + subMesh.indexCount, subMesh.verticesStart);
+            this.collider._collide(subMesh, subMesh['_lastColliderWorldVertices'], meshGeometry.indices, subMesh.indexStart, subMesh.indexStart + subMesh.indexCount, subMesh.verticesStart);
         };
         CollideWorker.prototype.checkSubmeshCollision = function (subMesh) {
             return true;
@@ -89,22 +125,28 @@ var BABYLONX;
     BABYLONX.CollideWorker = CollideWorker;
     var CollisionDetector = (function () {
         function CollisionDetector() {
-            this.meshes_ = {};
         }
         CollisionDetector.prototype.onOpenDatabaseMessage = function (payload) {
             var _this = this;
-            this.objectStoreName_ = payload.objectStoreName;
+            this._collisionCache = new CollisionCache();
+            this.objectStoreNameMeshes_ = payload.objectStoreNameMeshes;
+            this.objectStoreNameGeometries_ = payload.objectStoreNameGeometries;
             this.openDatabase(payload.dbName, payload.dbVersion, false, function (db) {
                 if (!db) {
-                    postMessage({ error: 1 /* NO_INDEXEDDB */ }, undefined);
+                    postMessage({ error: BABYLONX.WorkerErrorType.NO_INDEXEDDB }, undefined);
                 }
                 else {
-                    postMessage({ error: 0 /* SUCCESS */ }, undefined);
+                    postMessage({ error: BABYLONX.WorkerErrorType.SUCCESS }, undefined);
                 }
                 _this.indexedDb_ = db;
                 _this.getAllMeshes(function (meshes) {
                     meshes.forEach(function (mesh) {
-                        _this.meshes_[mesh.uniqueId] = mesh;
+                        _this._collisionCache.addMesh(mesh);
+                    });
+                });
+                _this.getAllGeometries(function (geometries) {
+                    geometries.forEach(function (geometry) {
+                        _this._collisionCache.addGeometry(geometry);
                     });
                 });
             });
@@ -115,7 +157,12 @@ var BABYLONX;
                 return;
             this.getSpecificMeshes(payload.updatedMeshes, function (meshes) {
                 meshes.forEach(function (mesh) {
-                    _this.meshes_[mesh.uniqueId] = mesh;
+                    _this._collisionCache.addMesh(mesh);
+                });
+            });
+            this.getSpecificGeometries(payload.updatedGeometries, function (geometries) {
+                geometries.forEach(function (geometry) {
+                    _this._collisionCache.addGeometry(geometry);
                 });
             });
         };
@@ -123,19 +170,19 @@ var BABYLONX;
             var finalPosition = BABYLON.Vector3.Zero();
             var collider = new BABYLON.Collider();
             collider.radius = BABYLON.Vector3.FromArray(payload.collider.radius);
-            var colliderWorker = new CollideWorker(collider, this.meshes_, finalPosition);
+            var colliderWorker = new CollideWorker(collider, this._collisionCache, finalPosition);
             colliderWorker.collideWithWorld(BABYLON.Vector3.FromArray(payload.collider.position), BABYLON.Vector3.FromArray(payload.collider.velocity), payload.maximumRetry, payload.excludedMeshUniqueId);
             var reply = {
                 collidedMeshUniqueId: collider.collidedMesh,
                 collisionId: payload.collisionId,
                 newPosition: finalPosition.asArray(),
-                error: 0 /* SUCCESS */
+                error: BABYLONX.WorkerErrorType.SUCCESS
             };
             postMessage(reply, undefined);
         };
         CollisionDetector.prototype.getSpecificMeshes = function (meshesToFetch, callback) {
-            var trans = this.indexedDb_.transaction([this.objectStoreName_]);
-            var store = trans.objectStore(this.objectStoreName_);
+            var trans = this.indexedDb_.transaction([this.objectStoreNameMeshes_]);
+            var store = trans.objectStore(this.objectStoreNameMeshes_);
             var meshes = [];
             trans.oncomplete = function (evt) {
                 callback(meshes);
@@ -151,8 +198,8 @@ var BABYLONX;
             });
         };
         CollisionDetector.prototype.getAllMeshes = function (callback) {
-            var trans = this.indexedDb_.transaction([this.objectStoreName_]);
-            var store = trans.objectStore(this.objectStoreName_);
+            var trans = this.indexedDb_.transaction([this.objectStoreNameMeshes_]);
+            var store = trans.objectStore(this.objectStoreNameMeshes_);
             var meshes = [];
             trans.oncomplete = function (evt) {
                 callback(meshes);
@@ -160,12 +207,49 @@ var BABYLONX;
             var cursorRequest = store.openCursor();
             cursorRequest.onerror = function (error) {
                 console.log(error);
-                postMessage({ error: 2 /* TRANSACTION_FAILED */ }, undefined);
+                postMessage({ error: BABYLONX.WorkerErrorType.TRANSACTION_FAILED }, undefined);
             };
             cursorRequest.onsuccess = function (evt) {
                 var cursor = evt.target['result'];
                 if (cursor) {
                     meshes.push(cursor.value);
+                    cursor.continue();
+                }
+            };
+        };
+        CollisionDetector.prototype.getSpecificGeometries = function (geometriesToFetch, callback) {
+            var trans = this.indexedDb_.transaction([this.objectStoreNameGeometries_]);
+            var store = trans.objectStore(this.objectStoreNameGeometries_);
+            var geometries = [];
+            trans.oncomplete = function (evt) {
+                callback(geometries);
+            };
+            var fetchObject = function (key) {
+                var req = store.get(key);
+                req.onsuccess = function (evt) {
+                    geometries.push(req.result);
+                };
+            };
+            geometriesToFetch.forEach(function (key) {
+                fetchObject(key);
+            });
+        };
+        CollisionDetector.prototype.getAllGeometries = function (callback) {
+            var trans = this.indexedDb_.transaction([this.objectStoreNameGeometries_]);
+            var store = trans.objectStore(this.objectStoreNameGeometries_);
+            var geometries = [];
+            trans.oncomplete = function (evt) {
+                callback(geometries);
+            };
+            var cursorRequest = store.openCursor();
+            cursorRequest.onerror = function (error) {
+                console.log(error);
+                postMessage({ error: BABYLONX.WorkerErrorType.TRANSACTION_FAILED }, undefined);
+            };
+            cursorRequest.onsuccess = function (evt) {
+                var cursor = evt.target['result'];
+                if (cursor) {
+                    geometries.push(cursor.value);
                     cursor.continue();
                 }
             };
@@ -180,7 +264,7 @@ var BABYLONX;
             var request = indexedDB.open(dbName, dbVersion);
             request.onerror = function (e) {
                 console.log(e);
-                postMessage({ error: 2 /* TRANSACTION_FAILED */ }, undefined);
+                postMessage({ error: BABYLONX.WorkerErrorType.TRANSACTION_FAILED }, undefined);
             };
             request.onsuccess = function (event) {
                 var openedDb = event.target['result'];
@@ -194,13 +278,13 @@ var BABYLONX;
     BABYLONX.onNewMessage = function (event) {
         var message = event.data;
         switch (message.taskType) {
-            case 0 /* OPEN_DB */:
+            case BABYLONX.WorkerTaskType.OPEN_DB:
                 collisionDetector.onOpenDatabaseMessage(message.payload);
                 break;
-            case 1 /* COLLIDE */:
+            case BABYLONX.WorkerTaskType.COLLIDE:
                 collisionDetector.onCollideMessage(message.payload);
                 break;
-            case 2 /* DB_UPDATE */:
+            case BABYLONX.WorkerTaskType.DB_UPDATE:
                 collisionDetector.onUpdateDatabaseMessage(message.payload);
                 break;
         }

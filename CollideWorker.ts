@@ -7,12 +7,41 @@ console.log("loading worker");
 
 module BABYLONX {
 
+    export class CollisionCache {
+        private _meshes: { [n: number]: SerializedMesh; } = {};
+        private _geometries: { [s: number]: SerializedGeometry; } = {};
+
+        public getMeshes(): { [n: number]: SerializedMesh; } {
+            return this._meshes;
+        }
+
+        public getGeometries(): { [s: number]: SerializedGeometry; } {
+            return this._geometries;
+        }
+
+        public getMesh(id: any): SerializedMesh {
+            return this._meshes[id];
+        }
+
+        public addMesh(mesh: SerializedMesh) {
+            this._meshes[mesh.uniqueId] = mesh;
+        }
+
+        public getGeometry(id: string): SerializedGeometry {
+            return this._geometries[id];
+        }
+
+        public addGeometry(geometry: SerializedGeometry) {
+            this._geometries[geometry.id] = geometry;
+        }
+    }
+
    export class CollideWorker {
 
         private collisionsScalingMatrix = BABYLON.Matrix.Zero();
         private collisionTranformationMatrix = BABYLON.Matrix.Zero();
 
-        constructor(public collider: BABYLON.Collider, private meshes_: { [n: number]: SerializedMesh; }, private finalPosition:BABYLON.Vector3) {
+        constructor(public collider: BABYLON.Collider, private _collisionCache: CollisionCache, private finalPosition:BABYLON.Vector3) {
 
         }
 
@@ -30,10 +59,10 @@ module BABYLONX {
         
 
             // Check all meshes
-
-            for (var uniqueId in this.meshes_) {
-                if (this.meshes_.hasOwnProperty(uniqueId) && parseInt(uniqueId) != excludedMeshUniqueId) {
-                    var mesh: SerializedMesh = this.meshes_[uniqueId];
+            var meshes = this._collisionCache.getMeshes();
+            for (var uniqueId in meshes) {
+                if (meshes.hasOwnProperty(uniqueId) && parseInt(uniqueId) != excludedMeshUniqueId) {
+                    var mesh: SerializedMesh = meshes[uniqueId];
                     if(mesh.checkCollisions)
                         this.checkCollision(mesh);
                 }
@@ -88,6 +117,17 @@ module BABYLONX {
             //    len = subMeshes.length;
             //}
 
+            if (!mesh.geometryId) {
+                console.log("no mesh geometry id");
+                return;
+            }
+
+            var meshGeometry = this._collisionCache.getGeometry(mesh.geometryId);
+            if (!meshGeometry) {
+                console.log("couldn't find geometry", mesh.geometryId);
+                return;
+            }
+
             for (var index = 0; index < mesh.subMeshes.length; index++) {
                 var subMesh = mesh.subMeshes[index];
 
@@ -98,14 +138,14 @@ module BABYLONX {
                 subMesh['getMesh'] = function () {
                     return mesh.uniqueId;
                 }
-                this.collideForSubMesh(subMesh, transformMatrix, mesh.indices, mesh.positions);
+                this.collideForSubMesh(subMesh, transformMatrix, meshGeometry);
             }
         }
 
-        private collideForSubMesh(subMesh: SerializedSubMesh, transformMatrix: BABYLON.Matrix, indices, positions: Array<number>): void {
+        private collideForSubMesh(subMesh: SerializedSubMesh, transformMatrix: BABYLON.Matrix, meshGeometry: SerializedGeometry): void {
             var positionsArray = [];
-            for (var i = 0; i < positions.length; i = i + 3) {
-                var p = BABYLON.Vector3.FromArray([positions[i], positions[i + 1], positions[i + 2]]);
+            for (var i = 0; i < meshGeometry.positions.length; i = i + 3) {
+                var p = BABYLON.Vector3.FromArray([meshGeometry.positions[i], meshGeometry.positions[i + 1], meshGeometry.positions[i + 2]]);
                 positionsArray.push(p);
             }
             subMesh['_lastColliderTransformMatrix'] = transformMatrix.clone();
@@ -122,7 +162,7 @@ module BABYLONX {
         
             //}
             // Collide
-            this.collider._collide(subMesh, subMesh['_lastColliderWorldVertices'], indices, subMesh.indexStart, subMesh.indexStart + subMesh.indexCount, subMesh.verticesStart);
+            this.collider._collide(subMesh, subMesh['_lastColliderWorldVertices'], meshGeometry.indices, subMesh.indexStart, subMesh.indexStart + subMesh.indexCount, subMesh.verticesStart);
         }
 
         //TODO - this! :-)
@@ -137,12 +177,16 @@ module BABYLONX {
 
         private indexedDb_: IDBDatabase;
 
-        private objectStoreName_: string;
+        private objectStoreNameMeshes_: string;
+        private objectStoreNameGeometries_: string;
 
-        private meshes_: { [n: number]: SerializedMesh; } = {};
+        private _collisionCache: CollisionCache;
 
         public onOpenDatabaseMessage(payload: OpenDatabasePayload) {
-            this.objectStoreName_ = payload.objectStoreName;
+            this._collisionCache = new CollisionCache();
+            this.objectStoreNameMeshes_ = payload.objectStoreNameMeshes;
+            this.objectStoreNameGeometries_ = payload.objectStoreNameGeometries;
+
             this.openDatabase(payload.dbName, payload.dbVersion, false,(db) => {
                 //indexedDB not available
                 if (!db) {
@@ -153,7 +197,13 @@ module BABYLONX {
                 this.indexedDb_ = db;
                 this.getAllMeshes((meshes) => {
                     meshes.forEach((mesh) => {
-                        this.meshes_[mesh.uniqueId] = mesh;
+                        this._collisionCache.addMesh(mesh);
+                    });
+                });
+
+                this.getAllGeometries((geometries) => {
+                    geometries.forEach((geometry) => {
+                        this._collisionCache.addGeometry(geometry);
                     });
                 });
             });
@@ -163,7 +213,13 @@ module BABYLONX {
             if (!this.indexedDb_) return;
             this.getSpecificMeshes(payload.updatedMeshes,(meshes) => {
                 meshes.forEach((mesh) => {
-                    this.meshes_[mesh.uniqueId] = mesh;
+                    this._collisionCache.addMesh(mesh);
+                });
+            });
+
+            this.getSpecificGeometries(payload.updatedGeometries,(geometries) => {
+                geometries.forEach((geometry) => {
+                    this._collisionCache.addGeometry(geometry);
                 });
             });
         }
@@ -174,7 +230,7 @@ module BABYLONX {
             var collider = new BABYLON.Collider();
             collider.radius = BABYLON.Vector3.FromArray(payload.collider.radius);
             
-            var colliderWorker = new CollideWorker(collider, this.meshes_, finalPosition);
+            var colliderWorker = new CollideWorker(collider, this._collisionCache, finalPosition);
             colliderWorker.collideWithWorld(BABYLON.Vector3.FromArray(payload.collider.position), BABYLON.Vector3.FromArray(payload.collider.velocity), payload.maximumRetry, payload.excludedMeshUniqueId);
             var reply: CollisionReply = {
                 collidedMeshUniqueId: <any> collider.collidedMesh,
@@ -190,8 +246,8 @@ module BABYLONX {
 
         //This is sadly impossible in a single query!
         private getSpecificMeshes(meshesToFetch: Array<number>, callback: (meshes: Array<SerializedMesh>) => void) {
-            var trans = this.indexedDb_.transaction([this.objectStoreName_]);
-            var store = trans.objectStore(this.objectStoreName_);
+            var trans = this.indexedDb_.transaction([this.objectStoreNameMeshes_]);
+            var store = trans.objectStore(this.objectStoreNameMeshes_);
             var meshes = [];
 
             trans.oncomplete = function (evt) {
@@ -212,8 +268,8 @@ module BABYLONX {
         }
 
         private getAllMeshes(callback: (meshes: Array<SerializedMesh>) => void) {
-            var trans = this.indexedDb_.transaction([this.objectStoreName_]);
-            var store = trans.objectStore(this.objectStoreName_);
+            var trans = this.indexedDb_.transaction([this.objectStoreNameMeshes_]);
+            var store = trans.objectStore(this.objectStoreNameMeshes_);
             var meshes = [];
 
             trans.oncomplete = function (evt) {
@@ -231,6 +287,54 @@ module BABYLONX {
                 var cursor = evt.target['result'];
                 if (cursor) {
                     meshes.push(cursor.value);
+                    cursor.continue();
+                }
+            };
+        }
+
+        //This is sadly impossible in a single query!
+        private getSpecificGeometries(geometriesToFetch: Array<string>, callback: (geometries: Array<SerializedGeometry>) => void) {
+            var trans = this.indexedDb_.transaction([this.objectStoreNameGeometries_]);
+            var store = trans.objectStore(this.objectStoreNameGeometries_);
+            var geometries = [];
+
+            trans.oncomplete = function (evt) {
+                //console.log("transaction finished", meshes.length);
+                callback(geometries);
+            };
+
+            var fetchObject = function (key: string) {
+                var req = store.get(key);
+                req.onsuccess = function (evt) {
+                    geometries.push(req.result);
+                }
+            }
+
+            geometriesToFetch.forEach(function (key) {
+                fetchObject(key);
+            });
+        }
+
+        private getAllGeometries(callback: (geometries: Array<SerializedGeometry>) => void) {
+            var trans = this.indexedDb_.transaction([this.objectStoreNameGeometries_]);
+            var store = trans.objectStore(this.objectStoreNameGeometries_);
+            var geometries = [];
+
+            trans.oncomplete = function (evt) {
+                callback(geometries);
+            };
+
+            var cursorRequest = store.openCursor();
+
+            cursorRequest.onerror = function (error) {
+                console.log(error);
+                postMessage({ error: WorkerErrorType.TRANSACTION_FAILED }, undefined);
+            };
+
+            cursorRequest.onsuccess = function (evt) {
+                var cursor = evt.target['result'];
+                if (cursor) {
+                    geometries.push(cursor.value);
                     cursor.continue();
                 }
             };
