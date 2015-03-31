@@ -50,8 +50,9 @@ More information coming soon.
 
 ##Notes
 
-* It will currently only work on the active camera of a scene, mesh-based collisions will not be computed at all.
-* Was not yet tested on a very large scene. Should be interesting! :-)
+* large scene testing - http://raananweber.com/webworkerCollision/?scene=complex
+* gravity testing - http://raananweber.com/webworkerCollision/?scene=gravity
+* shape testing - http://raananweber.com/webworkerCollision/
 
 ##Suggestions?
 
