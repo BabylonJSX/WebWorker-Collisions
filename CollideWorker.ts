@@ -189,23 +189,29 @@ module BABYLONX {
 
             this.openDatabase(payload.dbName, payload.dbVersion, false,(db) => {
                 //indexedDB not available
-                if (!db) {
-                    postMessage({ error: WorkerErrorType.NO_INDEXEDDB }, undefined);
-                } else {
-                    postMessage({ error: WorkerErrorType.SUCCESS }, undefined);
+                var reply : WorkerReply = {
+                    error: WorkerErrorType.SUCCESS,
+                    taskType: WorkerTaskType.OPEN_DB
                 }
-                this.indexedDb_ = db;
-                this.getAllMeshes((meshes) => {
-                    meshes.forEach((mesh) => {
-                        this._collisionCache.addMesh(mesh);
+                if (!db) {
+                    reply.error = WorkerErrorType.NO_INDEXEDDB;
+                    postMessage(reply, undefined);
+                } else {
+                    this.indexedDb_ = db;
+                    this.getAllMeshes((meshes) => {
+                        meshes.forEach((mesh) => {
+                            this._collisionCache.addMesh(mesh);
+                        });
+                        this.getAllGeometries((geometries) => {
+                            geometries.forEach((geometry) => {
+                                this._collisionCache.addGeometry(geometry);
+                            });
+                            postMessage(reply, undefined);
+                        });
                     });
-                });
-
-                this.getAllGeometries((geometries) => {
-                    geometries.forEach((geometry) => {
-                        this._collisionCache.addGeometry(geometry);
-                    });
-                });
+                    
+                }
+                
             });
         }
 
@@ -215,13 +221,19 @@ module BABYLONX {
                 meshes.forEach((mesh) => {
                     this._collisionCache.addMesh(mesh);
                 });
-            });
-
-            this.getSpecificGeometries(payload.updatedGeometries,(geometries) => {
-                geometries.forEach((geometry) => {
-                    this._collisionCache.addGeometry(geometry);
+                this.getSpecificGeometries(payload.updatedGeometries,(geometries) => {
+                    geometries.forEach((geometry) => {
+                        this._collisionCache.addGeometry(geometry);
+                    });
+                    var replay: WorkerReply = {
+                        error : WorkerErrorType.SUCCESS,
+                        taskType: WorkerTaskType.DB_UPDATE
+                    }
+                    postMessage(replay, undefined);
                 });
             });
+
+            
         }
 
         public onCollideMessage(payload: CollidePayload) {
@@ -232,13 +244,16 @@ module BABYLONX {
             
             var colliderWorker = new CollideWorker(collider, this._collisionCache, finalPosition);
             colliderWorker.collideWithWorld(BABYLON.Vector3.FromArray(payload.collider.position), BABYLON.Vector3.FromArray(payload.collider.velocity), payload.maximumRetry, payload.excludedMeshUniqueId);
-            var reply: CollisionReply = {
+            var replyPayload: CollisionReplyPayload = {
                 collidedMeshUniqueId: <any> collider.collidedMesh,
                 collisionId: payload.collisionId,
-                newPosition: finalPosition.asArray(),
-                error: WorkerErrorType.SUCCESS
+                newPosition: finalPosition.asArray()
             }
-
+            var reply: WorkerReply = {
+                error: WorkerErrorType.SUCCESS,
+                taskType: WorkerTaskType.COLLIDE,
+                payload: replyPayload
+            }
             postMessage(reply, undefined);
         }
 

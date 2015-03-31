@@ -9,6 +9,9 @@ module BABYLONX {
 
         private _init: boolean;
 
+        private _runningCollisionDetection: boolean = false;
+        private _runningDatabaseUpdate: number = 0;
+
         constructor(private _scene: BABYLON.Scene) {
 
             this._scene['collisionIndex'] = 0;
@@ -27,6 +30,8 @@ module BABYLONX {
             worker = this._worker;
 
             this._indexedDBPersist.onDatabaseUpdated = (meshes, geometries) => {
+                if (this._runningDatabaseUpdate > 3) return;
+                this._runningDatabaseUpdate++;
                 var payload: BABYLONX.UpdateDatabasePayload = {
                     updatedMeshes: meshes,
                     updatedGeometries: geometries
@@ -48,14 +53,14 @@ module BABYLONX {
         }
 
         private initSceneFunctions() {
-            BABYLON.Scene.prototype._getNewPosition = function (position: BABYLON.Vector3, velocity: BABYLON.Vector3, collider: BABYLON.Collider, maximumRetry: number, finalPosition: BABYLON.Vector3, excludedMesh: BABYLON.AbstractMesh = null, onNewPosition?: (newPosition: BABYLON.Vector3, collidedMesh?: BABYLON.AbstractMesh) => void): void {
+            BABYLON.Scene.prototype._getNewPosition = function (position: BABYLON.Vector3, velocity: BABYLON.Vector3, collider: BABYLON.Collider, maximumRetry: number, finalPosition: BABYLON.Vector3, excludedMesh: BABYLON.AbstractMesh = null, onNewPosition?: (newPosition: BABYLON.Vector3, collidedMesh?: BABYLON.AbstractMesh) => void, collisionIndex: number = 0): void {
                 position.divideToRef(collider.radius, this._scaledPosition);
                 velocity.divideToRef(collider.radius, this._scaledVelocity);
 
-                //this['collisionIndex'] = this['collisionIndex'] % 1000;
+                //Collision Index should be according to the trigger, and not incremented,
 
-                var collisionId = this['collisionIndex']++;
-                this['colliderQueue'][collisionId] = onNewPosition;
+                if (this['colliderQueue'][collisionIndex]) return;
+                this['colliderQueue'][collisionIndex] = onNewPosition;
 
                 if (worker) {
                     var payload: BABYLONX.CollidePayload = {
@@ -64,8 +69,8 @@ module BABYLONX {
                             velocity: this._scaledVelocity.asArray(),
                             radius: collider.radius.asArray()
                         },
-                        collisionId: collisionId,
-                        excludedMeshUniqueId: excludedMesh ? excludedMesh['uniqueId'] : null,
+                        collisionId: collisionIndex,
+                        excludedMeshUniqueId: excludedMesh ? excludedMesh.uniqueId : null,
                         maximumRetry: maximumRetry
                     };
                     var message: BABYLONX.BabylonMessage = {
@@ -101,8 +106,8 @@ module BABYLONX {
                                 this.onCollide(this._collider.collidedMesh);
                             }
                         }
-                        //console.timeEnd("webworker");
-                    });
+                        //A simple hack to create a unique velocity id for gravity calculations.
+                    }, velocity.equals(this.getScene().gravity) ? this.uniqueId * 10000 : this.uniqueId);
 
             }
 
@@ -122,27 +127,40 @@ module BABYLONX {
                         if (this._diffPositionForCollisions.length() > BABYLON.Engine.CollisionsEpsilon) {
                             this.position.addInPlace(this._diffPositionForCollisions);
                         }
-                    });
+                    }, this.uniqueId);
             }
         }
 
         private _onMessageFromWorker = (e: MessageEvent) => {
-            var returnData = <BABYLONX.CollisionReply> e.data;
-            if (returnData.error == WorkerErrorType.NO_INDEXEDDB) {
-                console.log("no indexeddb, fallback to normal collision detection");
-                this._init = true;
-                return;
-            }
-            if (!this._init) {
-                console.log("webworker initialized");
-                this.initSceneFunctions();
-                this._init = true;
-            }
-            if (!returnData.collisionId) return;
+            var returnData = <BABYLONX.WorkerReply> e.data;
 
-            this._scene['colliderQueue'][returnData.collisionId](BABYLON.Vector3.FromArray(returnData.newPosition), this._scene.getMeshByUniqueID(returnData.collidedMeshUniqueId));
-            //cleanup
-            this._scene['colliderQueue'][returnData.collisionId] = undefined;
+            switch (returnData.taskType) {
+                case WorkerTaskType.OPEN_DB:
+                    if (returnData.error == WorkerErrorType.NO_INDEXEDDB) {
+                        console.log("no indexeddb in worker, fallback to normal collision detection");
+                    } else {
+                        if (!this._init) {
+                            console.log("webworker initialized");
+                            this.initSceneFunctions();
+                        }
+                    }
+                    this._init = true;
+                    break;
+                case WorkerTaskType.DB_UPDATE:
+                    this._runningDatabaseUpdate--;
+                    break;
+                case WorkerTaskType.COLLIDE:
+                    this._runningCollisionDetection = false;
+                    var returnPayload : CollisionReplyPayload = returnData.payload;
+                    if (!this._scene['colliderQueue'][returnPayload.collisionId]) return;
+
+                    this._scene['colliderQueue'][returnPayload.collisionId](BABYLON.Vector3.FromArray(returnPayload.newPosition), this._scene.getMeshByUniqueID(returnPayload.collidedMeshUniqueId));
+                    //cleanup
+                    this._scene['colliderQueue'][returnPayload.collisionId] = undefined;
+                    break;
+            }
+
+            
         }
 
         private _sendOpenDBMessage() {
@@ -201,8 +219,13 @@ module BABYLONX {
         radius: Array<number>;
     }
 
-    export interface CollisionReply {
+    export interface WorkerReply {
         error: WorkerErrorType;
+        taskType: WorkerTaskType;
+        payload?: any; 
+    }
+
+    export interface CollisionReplyPayload {
         newPosition: Array<number>;
         collisionId: number;
         collidedMeshUniqueId: number;

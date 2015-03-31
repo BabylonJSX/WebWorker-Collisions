@@ -132,23 +132,28 @@ var BABYLONX;
             this.objectStoreNameMeshes_ = payload.objectStoreNameMeshes;
             this.objectStoreNameGeometries_ = payload.objectStoreNameGeometries;
             this.openDatabase(payload.dbName, payload.dbVersion, false, function (db) {
+                var reply = {
+                    error: BABYLONX.WorkerErrorType.SUCCESS,
+                    taskType: BABYLONX.WorkerTaskType.OPEN_DB
+                };
                 if (!db) {
-                    postMessage({ error: BABYLONX.WorkerErrorType.NO_INDEXEDDB }, undefined);
+                    reply.error = BABYLONX.WorkerErrorType.NO_INDEXEDDB;
+                    postMessage(reply, undefined);
                 }
                 else {
-                    postMessage({ error: BABYLONX.WorkerErrorType.SUCCESS }, undefined);
+                    _this.indexedDb_ = db;
+                    _this.getAllMeshes(function (meshes) {
+                        meshes.forEach(function (mesh) {
+                            _this._collisionCache.addMesh(mesh);
+                        });
+                        _this.getAllGeometries(function (geometries) {
+                            geometries.forEach(function (geometry) {
+                                _this._collisionCache.addGeometry(geometry);
+                            });
+                            postMessage(reply, undefined);
+                        });
+                    });
                 }
-                _this.indexedDb_ = db;
-                _this.getAllMeshes(function (meshes) {
-                    meshes.forEach(function (mesh) {
-                        _this._collisionCache.addMesh(mesh);
-                    });
-                });
-                _this.getAllGeometries(function (geometries) {
-                    geometries.forEach(function (geometry) {
-                        _this._collisionCache.addGeometry(geometry);
-                    });
-                });
             });
         };
         CollisionDetector.prototype.onUpdateDatabaseMessage = function (payload) {
@@ -159,10 +164,15 @@ var BABYLONX;
                 meshes.forEach(function (mesh) {
                     _this._collisionCache.addMesh(mesh);
                 });
-            });
-            this.getSpecificGeometries(payload.updatedGeometries, function (geometries) {
-                geometries.forEach(function (geometry) {
-                    _this._collisionCache.addGeometry(geometry);
+                _this.getSpecificGeometries(payload.updatedGeometries, function (geometries) {
+                    geometries.forEach(function (geometry) {
+                        _this._collisionCache.addGeometry(geometry);
+                    });
+                    var replay = {
+                        error: BABYLONX.WorkerErrorType.SUCCESS,
+                        taskType: BABYLONX.WorkerTaskType.DB_UPDATE
+                    };
+                    postMessage(replay, undefined);
                 });
             });
         };
@@ -172,11 +182,15 @@ var BABYLONX;
             collider.radius = BABYLON.Vector3.FromArray(payload.collider.radius);
             var colliderWorker = new CollideWorker(collider, this._collisionCache, finalPosition);
             colliderWorker.collideWithWorld(BABYLON.Vector3.FromArray(payload.collider.position), BABYLON.Vector3.FromArray(payload.collider.velocity), payload.maximumRetry, payload.excludedMeshUniqueId);
-            var reply = {
+            var replyPayload = {
                 collidedMeshUniqueId: collider.collidedMesh,
                 collisionId: payload.collisionId,
-                newPosition: finalPosition.asArray(),
-                error: BABYLONX.WorkerErrorType.SUCCESS
+                newPosition: finalPosition.asArray()
+            };
+            var reply = {
+                error: BABYLONX.WorkerErrorType.SUCCESS,
+                taskType: BABYLONX.WorkerTaskType.COLLIDE,
+                payload: replyPayload
             };
             postMessage(reply, undefined);
         };

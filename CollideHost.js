@@ -5,22 +5,35 @@ var BABYLONX;
         function CollisionHost(_scene) {
             var _this = this;
             this._scene = _scene;
+            this._runningCollisionDetection = false;
+            this._runningDatabaseUpdate = 0;
             this._onMessageFromWorker = function (e) {
                 var returnData = e.data;
-                if (returnData.error == 1 /* NO_INDEXEDDB */) {
-                    console.log("no indexeddb, fallback to normal collision detection");
-                    _this._init = true;
-                    return;
+                switch (returnData.taskType) {
+                    case 0 /* OPEN_DB */:
+                        if (returnData.error == 1 /* NO_INDEXEDDB */) {
+                            console.log("no indexeddb in worker, fallback to normal collision detection");
+                        }
+                        else {
+                            if (!_this._init) {
+                                console.log("webworker initialized");
+                                _this.initSceneFunctions();
+                            }
+                        }
+                        _this._init = true;
+                        break;
+                    case 2 /* DB_UPDATE */:
+                        _this._runningDatabaseUpdate--;
+                        break;
+                    case 1 /* COLLIDE */:
+                        _this._runningCollisionDetection = false;
+                        var returnPayload = returnData.payload;
+                        if (!_this._scene['colliderQueue'][returnPayload.collisionId])
+                            return;
+                        _this._scene['colliderQueue'][returnPayload.collisionId](BABYLON.Vector3.FromArray(returnPayload.newPosition), _this._scene.getMeshByUniqueID(returnPayload.collidedMeshUniqueId));
+                        _this._scene['colliderQueue'][returnPayload.collisionId] = undefined;
+                        break;
                 }
-                if (!_this._init) {
-                    console.log("webworker initialized");
-                    _this.initSceneFunctions();
-                    _this._init = true;
-                }
-                if (!returnData.collisionId)
-                    return;
-                _this._scene['colliderQueue'][returnData.collisionId](BABYLON.Vector3.FromArray(returnData.newPosition), _this._scene.getMeshByUniqueID(returnData.collidedMeshUniqueId));
-                _this._scene['colliderQueue'][returnData.collisionId] = undefined;
             };
             this._scene['collisionIndex'] = 0;
             this._scene['colliderQueue'] = [];
@@ -32,6 +45,9 @@ var BABYLONX;
             this._worker = new Worker("CollideWorker.js");
             worker = this._worker;
             this._indexedDBPersist.onDatabaseUpdated = function (meshes, geometries) {
+                if (_this._runningDatabaseUpdate > 3)
+                    return;
+                _this._runningDatabaseUpdate++;
                 var payload = {
                     updatedMeshes: meshes,
                     updatedGeometries: geometries
@@ -49,12 +65,14 @@ var BABYLONX;
             return !!this._init;
         };
         CollisionHost.prototype.initSceneFunctions = function () {
-            BABYLON.Scene.prototype._getNewPosition = function (position, velocity, collider, maximumRetry, finalPosition, excludedMesh, onNewPosition) {
+            BABYLON.Scene.prototype._getNewPosition = function (position, velocity, collider, maximumRetry, finalPosition, excludedMesh, onNewPosition, collisionIndex) {
                 if (excludedMesh === void 0) { excludedMesh = null; }
+                if (collisionIndex === void 0) { collisionIndex = 0; }
                 position.divideToRef(collider.radius, this._scaledPosition);
                 velocity.divideToRef(collider.radius, this._scaledVelocity);
-                var collisionId = this['collisionIndex']++;
-                this['colliderQueue'][collisionId] = onNewPosition;
+                if (this['colliderQueue'][collisionIndex])
+                    return;
+                this['colliderQueue'][collisionIndex] = onNewPosition;
                 if (worker) {
                     var payload = {
                         collider: {
@@ -62,8 +80,8 @@ var BABYLONX;
                             velocity: this._scaledVelocity.asArray(),
                             radius: collider.radius.asArray()
                         },
-                        collisionId: collisionId,
-                        excludedMeshUniqueId: excludedMesh ? excludedMesh['uniqueId'] : null,
+                        collisionId: collisionIndex,
+                        excludedMeshUniqueId: excludedMesh ? excludedMesh.uniqueId : null,
                         maximumRetry: maximumRetry
                     };
                     var message = {
@@ -94,7 +112,7 @@ var BABYLONX;
                             _this.onCollide(_this._collider.collidedMesh);
                         }
                     }
-                });
+                }, velocity.equals(this.getScene().gravity) ? this.uniqueId * 10000 : this.uniqueId);
             };
             BABYLON.AbstractMesh.prototype.moveWithCollisions = function (velocity) {
                 var _this = this;
@@ -109,7 +127,7 @@ var BABYLONX;
                     if (_this._diffPositionForCollisions.length() > BABYLON.Engine.CollisionsEpsilon) {
                         _this.position.addInPlace(_this._diffPositionForCollisions);
                     }
-                });
+                }, this.uniqueId);
             };
         };
         CollisionHost.prototype._sendOpenDBMessage = function () {
