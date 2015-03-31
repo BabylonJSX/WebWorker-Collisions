@@ -2,7 +2,7 @@
 
 This BabylonJS (2.1 and up) extension will run collision detection in a Worker instead of on the main UI thread.
 
-It is using the IndexedDB-Backend plugin (https://github.com/BabylonJSX/IndexedDB-Backend)
+It is using the IndexedDB-Backend plugin (https://github.com/BabylonJSX/IndexedDB-Backend) that works on IE >= 10 and Chrome >= 24. FF supported from version 37.
 
 ##Why do I need this?
 The collision detection is one of the most expensive functions in BabylonJS. This is the major cause of FPS reduction.
