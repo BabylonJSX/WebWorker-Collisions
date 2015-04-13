@@ -162,7 +162,7 @@ module BABYLONX {
         
             //}
             // Collide
-            this.collider._collide(subMesh, subMesh['_lastColliderWorldVertices'], meshGeometry.indices, subMesh.indexStart, subMesh.indexStart + subMesh.indexCount, subMesh.verticesStart);
+            this.collider._collide(subMesh, subMesh['_lastColliderWorldVertices'], <any> meshGeometry.indices, subMesh.indexStart, subMesh.indexStart + subMesh.indexCount, subMesh.verticesStart);
         }
 
         //TODO - this! :-)
@@ -173,19 +173,79 @@ module BABYLONX {
 
     }
 
-    export class CollisionDetector {
+   export interface ICollisionDetector {
+       onInit(payload: InitPayload) : void;
+       onUpdate(payload: UpdatePayload) : void;
+       onCollision(payload: CollidePayload) : void;
+   }
 
-        private indexedDb_: IDBDatabase;
+   export class CollisionDetectorTransferable implements ICollisionDetector {
+       private _collisionCache: CollisionCache;
 
-        private objectStoreNameMeshes_: string;
-        private objectStoreNameGeometries_: string;
+       public onInit(payload: InitPayload) {
+           this._collisionCache = new CollisionCache();
+           var reply: WorkerReply = {
+               error: WorkerErrorType.SUCCESS,
+               taskType: WorkerTaskType.OPEN_DB
+           }
+           postMessage(reply, undefined);
+       }
+
+       public onUpdate(payload: UpdateWithTransferable) {
+           for (var id in payload.updatedGeometries) {
+               if (payload.updatedGeometries.hasOwnProperty(id)) {
+                   this._collisionCache.addGeometry(payload.updatedGeometries[id]);
+               }
+           }
+           for (var uniqueId in payload.updatedMeshes) {
+               if (payload.updatedMeshes.hasOwnProperty(uniqueId)) {
+                   this._collisionCache.addMesh(payload.updatedMeshes[uniqueId]);
+               }
+           }
+
+           var replay: WorkerReply = {
+               error: WorkerErrorType.SUCCESS,
+               taskType: WorkerTaskType.DB_UPDATE
+           }
+           console.log("updated");
+           postMessage(replay, undefined);
+       }
+
+       public onCollision(payload: CollidePayload) {
+           var finalPosition = BABYLON.Vector3.Zero();
+           //create a new collider
+           var collider = new BABYLON.Collider();
+           collider.radius = BABYLON.Vector3.FromArray(payload.collider.radius);
+
+           var colliderWorker = new CollideWorker(collider, this._collisionCache, finalPosition);
+           colliderWorker.collideWithWorld(BABYLON.Vector3.FromArray(payload.collider.position), BABYLON.Vector3.FromArray(payload.collider.velocity), payload.maximumRetry, payload.excludedMeshUniqueId);
+           var replyPayload: CollisionReplyPayload = {
+               collidedMeshUniqueId: <any> collider.collidedMesh,
+               collisionId: payload.collisionId,
+               newPosition: finalPosition.asArray()
+           }
+           var reply: WorkerReply = {
+               error: WorkerErrorType.SUCCESS,
+               taskType: WorkerTaskType.COLLIDE,
+               payload: replyPayload
+           }
+           postMessage(reply, undefined);
+       }
+   }
+
+    export class CollisionDetectorIndexedDB implements ICollisionDetector {
+
+        private _indexedDb: IDBDatabase;
+
+        private _objectStoreNameMeshes: string;
+        private _objectStoreNameGeometries: string;
 
         private _collisionCache: CollisionCache;
 
-        public onOpenDatabaseMessage(payload: OpenDatabasePayload) {
+        public onInit(payload: OpenDatabasePayload) {
             this._collisionCache = new CollisionCache();
-            this.objectStoreNameMeshes_ = payload.objectStoreNameMeshes;
-            this.objectStoreNameGeometries_ = payload.objectStoreNameGeometries;
+            this._objectStoreNameMeshes = payload.objectStoreNameMeshes;
+            this._objectStoreNameGeometries = payload.objectStoreNameGeometries;
 
             this.openDatabase(payload.dbName, payload.dbVersion, false,(db) => {
                 //indexedDB not available
@@ -197,7 +257,7 @@ module BABYLONX {
                     reply.error = WorkerErrorType.NO_INDEXEDDB;
                     postMessage(reply, undefined);
                 } else {
-                    this.indexedDb_ = db;
+                    this._indexedDb = db;
                     this.getAllMeshes((meshes) => {
                         meshes.forEach((mesh) => {
                             this._collisionCache.addMesh(mesh);
@@ -215,8 +275,8 @@ module BABYLONX {
             });
         }
 
-        public onUpdateDatabaseMessage(payload: UpdateDatabasePayload) {
-            if (!this.indexedDb_) return;
+        public onUpdate(payload: UpdateDatabasePayload) {
+            if (!this._indexedDb) return;
             this.getSpecificMeshes(payload.updatedMeshes,(meshes) => {
                 meshes.forEach((mesh) => {
                     this._collisionCache.addMesh(mesh);
@@ -229,6 +289,7 @@ module BABYLONX {
                         error : WorkerErrorType.SUCCESS,
                         taskType: WorkerTaskType.DB_UPDATE
                     }
+                    console.log("updated");
                     postMessage(replay, undefined);
                 });
             });
@@ -236,7 +297,7 @@ module BABYLONX {
             
         }
 
-        public onCollideMessage(payload: CollidePayload) {
+        public onCollision(payload: CollidePayload) {
             var finalPosition = BABYLON.Vector3.Zero();
             //create a new collider
             var collider = new BABYLON.Collider();
@@ -261,8 +322,8 @@ module BABYLONX {
 
         //This is sadly impossible in a single query!
         private getSpecificMeshes(meshesToFetch: Array<number>, callback: (meshes: Array<SerializedMesh>) => void) {
-            var trans = this.indexedDb_.transaction([this.objectStoreNameMeshes_]);
-            var store = trans.objectStore(this.objectStoreNameMeshes_);
+            var trans = this._indexedDb.transaction([this._objectStoreNameMeshes]);
+            var store = trans.objectStore(this._objectStoreNameMeshes);
             var meshes = [];
 
             trans.oncomplete = function (evt) {
@@ -283,8 +344,8 @@ module BABYLONX {
         }
 
         private getAllMeshes(callback: (meshes: Array<SerializedMesh>) => void) {
-            var trans = this.indexedDb_.transaction([this.objectStoreNameMeshes_]);
-            var store = trans.objectStore(this.objectStoreNameMeshes_);
+            var trans = this._indexedDb.transaction([this._objectStoreNameMeshes]);
+            var store = trans.objectStore(this._objectStoreNameMeshes);
             var meshes = [];
 
             trans.oncomplete = function (evt) {
@@ -309,8 +370,8 @@ module BABYLONX {
 
         //This is sadly impossible in a single query!
         private getSpecificGeometries(geometriesToFetch: Array<string>, callback: (geometries: Array<SerializedGeometry>) => void) {
-            var trans = this.indexedDb_.transaction([this.objectStoreNameGeometries_]);
-            var store = trans.objectStore(this.objectStoreNameGeometries_);
+            var trans = this._indexedDb.transaction([this._objectStoreNameGeometries]);
+            var store = trans.objectStore(this._objectStoreNameGeometries);
             var geometries = [];
 
             trans.oncomplete = function (evt) {
@@ -331,8 +392,8 @@ module BABYLONX {
         }
 
         private getAllGeometries(callback: (geometries: Array<SerializedGeometry>) => void) {
-            var trans = this.indexedDb_.transaction([this.objectStoreNameGeometries_]);
-            var store = trans.objectStore(this.objectStoreNameGeometries_);
+            var trans = this._indexedDb.transaction([this._objectStoreNameGeometries]);
+            var store = trans.objectStore(this._objectStoreNameGeometries);
             var geometries = [];
 
             trans.oncomplete = function (evt) {
@@ -378,19 +439,20 @@ module BABYLONX {
         }
    }
 
-    var collisionDetector = new CollisionDetector();
+    var collisionDetector: ICollisionDetector = new CollisionDetectorTransferable();
+    //var collisionDetector: ICollisionDetector = new CollisionDetectorIndexedDB();
 
     export var onNewMessage = function (event: MessageEvent) {
         var message = <BabylonMessage> event.data;
         switch (message.taskType) {
             case WorkerTaskType.OPEN_DB:
-                collisionDetector.onOpenDatabaseMessage(<OpenDatabasePayload> message.payload);
+                collisionDetector.onInit(<InitPayload> message.payload);
                 break;
             case WorkerTaskType.COLLIDE:
-                collisionDetector.onCollideMessage(<CollidePayload> message.payload);
+                collisionDetector.onCollision(<CollidePayload> message.payload);
                 break;
             case WorkerTaskType.DB_UPDATE:
-                collisionDetector.onUpdateDatabaseMessage(<UpdateDatabasePayload> message.payload);
+                collisionDetector.onUpdate(<UpdatePayload> message.payload);
                 break;
         }
     }

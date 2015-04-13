@@ -123,60 +123,36 @@ var BABYLONX;
         return CollideWorker;
     })();
     BABYLONX.CollideWorker = CollideWorker;
-    var CollisionDetector = (function () {
-        function CollisionDetector() {
+    var CollisionDetectorTransferable = (function () {
+        function CollisionDetectorTransferable() {
         }
-        CollisionDetector.prototype.onOpenDatabaseMessage = function (payload) {
-            var _this = this;
+        CollisionDetectorTransferable.prototype.onInit = function (payload) {
             this._collisionCache = new CollisionCache();
-            this.objectStoreNameMeshes_ = payload.objectStoreNameMeshes;
-            this.objectStoreNameGeometries_ = payload.objectStoreNameGeometries;
-            this.openDatabase(payload.dbName, payload.dbVersion, false, function (db) {
-                var reply = {
-                    error: BABYLONX.WorkerErrorType.SUCCESS,
-                    taskType: BABYLONX.WorkerTaskType.OPEN_DB
-                };
-                if (!db) {
-                    reply.error = BABYLONX.WorkerErrorType.NO_INDEXEDDB;
-                    postMessage(reply, undefined);
-                }
-                else {
-                    _this.indexedDb_ = db;
-                    _this.getAllMeshes(function (meshes) {
-                        meshes.forEach(function (mesh) {
-                            _this._collisionCache.addMesh(mesh);
-                        });
-                        _this.getAllGeometries(function (geometries) {
-                            geometries.forEach(function (geometry) {
-                                _this._collisionCache.addGeometry(geometry);
-                            });
-                            postMessage(reply, undefined);
-                        });
-                    });
-                }
-            });
+            var reply = {
+                error: BABYLONX.WorkerErrorType.SUCCESS,
+                taskType: BABYLONX.WorkerTaskType.OPEN_DB
+            };
+            postMessage(reply, undefined);
         };
-        CollisionDetector.prototype.onUpdateDatabaseMessage = function (payload) {
-            var _this = this;
-            if (!this.indexedDb_)
-                return;
-            this.getSpecificMeshes(payload.updatedMeshes, function (meshes) {
-                meshes.forEach(function (mesh) {
-                    _this._collisionCache.addMesh(mesh);
-                });
-                _this.getSpecificGeometries(payload.updatedGeometries, function (geometries) {
-                    geometries.forEach(function (geometry) {
-                        _this._collisionCache.addGeometry(geometry);
-                    });
-                    var replay = {
-                        error: BABYLONX.WorkerErrorType.SUCCESS,
-                        taskType: BABYLONX.WorkerTaskType.DB_UPDATE
-                    };
-                    postMessage(replay, undefined);
-                });
-            });
+        CollisionDetectorTransferable.prototype.onUpdate = function (payload) {
+            for (var id in payload.updatedGeometries) {
+                if (payload.updatedGeometries.hasOwnProperty(id)) {
+                    this._collisionCache.addGeometry(payload.updatedGeometries[id]);
+                }
+            }
+            for (var uniqueId in payload.updatedMeshes) {
+                if (payload.updatedMeshes.hasOwnProperty(uniqueId)) {
+                    this._collisionCache.addMesh(payload.updatedMeshes[uniqueId]);
+                }
+            }
+            var replay = {
+                error: BABYLONX.WorkerErrorType.SUCCESS,
+                taskType: BABYLONX.WorkerTaskType.DB_UPDATE
+            };
+            console.log("updated");
+            postMessage(replay, undefined);
         };
-        CollisionDetector.prototype.onCollideMessage = function (payload) {
+        CollisionDetectorTransferable.prototype.onCollision = function (payload) {
             var finalPosition = BABYLON.Vector3.Zero();
             var collider = new BABYLON.Collider();
             collider.radius = BABYLON.Vector3.FromArray(payload.collider.radius);
@@ -194,9 +170,84 @@ var BABYLONX;
             };
             postMessage(reply, undefined);
         };
-        CollisionDetector.prototype.getSpecificMeshes = function (meshesToFetch, callback) {
-            var trans = this.indexedDb_.transaction([this.objectStoreNameMeshes_]);
-            var store = trans.objectStore(this.objectStoreNameMeshes_);
+        return CollisionDetectorTransferable;
+    })();
+    BABYLONX.CollisionDetectorTransferable = CollisionDetectorTransferable;
+    var CollisionDetectorIndexedDB = (function () {
+        function CollisionDetectorIndexedDB() {
+        }
+        CollisionDetectorIndexedDB.prototype.onInit = function (payload) {
+            var _this = this;
+            this._collisionCache = new CollisionCache();
+            this._objectStoreNameMeshes = payload.objectStoreNameMeshes;
+            this._objectStoreNameGeometries = payload.objectStoreNameGeometries;
+            this.openDatabase(payload.dbName, payload.dbVersion, false, function (db) {
+                var reply = {
+                    error: BABYLONX.WorkerErrorType.SUCCESS,
+                    taskType: BABYLONX.WorkerTaskType.OPEN_DB
+                };
+                if (!db) {
+                    reply.error = BABYLONX.WorkerErrorType.NO_INDEXEDDB;
+                    postMessage(reply, undefined);
+                }
+                else {
+                    _this._indexedDb = db;
+                    _this.getAllMeshes(function (meshes) {
+                        meshes.forEach(function (mesh) {
+                            _this._collisionCache.addMesh(mesh);
+                        });
+                        _this.getAllGeometries(function (geometries) {
+                            geometries.forEach(function (geometry) {
+                                _this._collisionCache.addGeometry(geometry);
+                            });
+                            postMessage(reply, undefined);
+                        });
+                    });
+                }
+            });
+        };
+        CollisionDetectorIndexedDB.prototype.onUpdate = function (payload) {
+            var _this = this;
+            if (!this._indexedDb)
+                return;
+            this.getSpecificMeshes(payload.updatedMeshes, function (meshes) {
+                meshes.forEach(function (mesh) {
+                    _this._collisionCache.addMesh(mesh);
+                });
+                _this.getSpecificGeometries(payload.updatedGeometries, function (geometries) {
+                    geometries.forEach(function (geometry) {
+                        _this._collisionCache.addGeometry(geometry);
+                    });
+                    var replay = {
+                        error: BABYLONX.WorkerErrorType.SUCCESS,
+                        taskType: BABYLONX.WorkerTaskType.DB_UPDATE
+                    };
+                    console.log("updated");
+                    postMessage(replay, undefined);
+                });
+            });
+        };
+        CollisionDetectorIndexedDB.prototype.onCollision = function (payload) {
+            var finalPosition = BABYLON.Vector3.Zero();
+            var collider = new BABYLON.Collider();
+            collider.radius = BABYLON.Vector3.FromArray(payload.collider.radius);
+            var colliderWorker = new CollideWorker(collider, this._collisionCache, finalPosition);
+            colliderWorker.collideWithWorld(BABYLON.Vector3.FromArray(payload.collider.position), BABYLON.Vector3.FromArray(payload.collider.velocity), payload.maximumRetry, payload.excludedMeshUniqueId);
+            var replyPayload = {
+                collidedMeshUniqueId: collider.collidedMesh,
+                collisionId: payload.collisionId,
+                newPosition: finalPosition.asArray()
+            };
+            var reply = {
+                error: BABYLONX.WorkerErrorType.SUCCESS,
+                taskType: BABYLONX.WorkerTaskType.COLLIDE,
+                payload: replyPayload
+            };
+            postMessage(reply, undefined);
+        };
+        CollisionDetectorIndexedDB.prototype.getSpecificMeshes = function (meshesToFetch, callback) {
+            var trans = this._indexedDb.transaction([this._objectStoreNameMeshes]);
+            var store = trans.objectStore(this._objectStoreNameMeshes);
             var meshes = [];
             trans.oncomplete = function (evt) {
                 callback(meshes);
@@ -211,9 +262,9 @@ var BABYLONX;
                 fetchObject(key);
             });
         };
-        CollisionDetector.prototype.getAllMeshes = function (callback) {
-            var trans = this.indexedDb_.transaction([this.objectStoreNameMeshes_]);
-            var store = trans.objectStore(this.objectStoreNameMeshes_);
+        CollisionDetectorIndexedDB.prototype.getAllMeshes = function (callback) {
+            var trans = this._indexedDb.transaction([this._objectStoreNameMeshes]);
+            var store = trans.objectStore(this._objectStoreNameMeshes);
             var meshes = [];
             trans.oncomplete = function (evt) {
                 callback(meshes);
@@ -231,9 +282,9 @@ var BABYLONX;
                 }
             };
         };
-        CollisionDetector.prototype.getSpecificGeometries = function (geometriesToFetch, callback) {
-            var trans = this.indexedDb_.transaction([this.objectStoreNameGeometries_]);
-            var store = trans.objectStore(this.objectStoreNameGeometries_);
+        CollisionDetectorIndexedDB.prototype.getSpecificGeometries = function (geometriesToFetch, callback) {
+            var trans = this._indexedDb.transaction([this._objectStoreNameGeometries]);
+            var store = trans.objectStore(this._objectStoreNameGeometries);
             var geometries = [];
             trans.oncomplete = function (evt) {
                 callback(geometries);
@@ -248,9 +299,9 @@ var BABYLONX;
                 fetchObject(key);
             });
         };
-        CollisionDetector.prototype.getAllGeometries = function (callback) {
-            var trans = this.indexedDb_.transaction([this.objectStoreNameGeometries_]);
-            var store = trans.objectStore(this.objectStoreNameGeometries_);
+        CollisionDetectorIndexedDB.prototype.getAllGeometries = function (callback) {
+            var trans = this._indexedDb.transaction([this._objectStoreNameGeometries]);
+            var store = trans.objectStore(this._objectStoreNameGeometries);
             var geometries = [];
             trans.oncomplete = function (evt) {
                 callback(geometries);
@@ -268,7 +319,7 @@ var BABYLONX;
                 }
             };
         };
-        CollisionDetector.prototype.openDatabase = function (dbName, dbVersion, deleteDatabase, successCallback) {
+        CollisionDetectorIndexedDB.prototype.openDatabase = function (dbName, dbVersion, deleteDatabase, successCallback) {
             if (!indexedDB) {
                 successCallback(null);
             }
@@ -285,21 +336,21 @@ var BABYLONX;
                 successCallback(openedDb);
             };
         };
-        return CollisionDetector;
+        return CollisionDetectorIndexedDB;
     })();
-    BABYLONX.CollisionDetector = CollisionDetector;
-    var collisionDetector = new CollisionDetector();
+    BABYLONX.CollisionDetectorIndexedDB = CollisionDetectorIndexedDB;
+    var collisionDetector = new CollisionDetectorTransferable();
     BABYLONX.onNewMessage = function (event) {
         var message = event.data;
         switch (message.taskType) {
             case BABYLONX.WorkerTaskType.OPEN_DB:
-                collisionDetector.onOpenDatabaseMessage(message.payload);
+                collisionDetector.onInit(message.payload);
                 break;
             case BABYLONX.WorkerTaskType.COLLIDE:
-                collisionDetector.onCollideMessage(message.payload);
+                collisionDetector.onCollision(message.payload);
                 break;
             case BABYLONX.WorkerTaskType.DB_UPDATE:
-                collisionDetector.onUpdateDatabaseMessage(message.payload);
+                collisionDetector.onUpdate(message.payload);
                 break;
         }
     };

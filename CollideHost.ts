@@ -12,14 +12,15 @@ module BABYLONX {
         private _runningCollisionDetection: boolean = false;
         private _runningDatabaseUpdate: number = 0;
 
-        constructor(private _scene: BABYLON.Scene) {
+        private _addUpdateList: { [n: number]: SerializedMesh; }//: Array<SerializedMesh>;
+        private _addUpdateListGeometries: { [s: string]: SerializedGeometry; };
+
+        constructor(private _scene: BABYLON.Scene, transferables: boolean = false) {
 
             this._scene['collisionIndex'] = 0;
 
             this._scene['colliderQueue'] = [];
             this._init = false;
-
-            this._indexedDBPersist = new BABYLONX['IndexedDBPersist'](scene);
 
             //Detect if worker is available.
             if (!Worker) {
@@ -28,28 +29,154 @@ module BABYLONX {
 
             this._worker = new Worker("CollideWorker.js");
             worker = this._worker;
-
-            this._indexedDBPersist.onDatabaseUpdated = (meshes, geometries) => {
-                if (this._runningDatabaseUpdate > 3) return;
-                this._runningDatabaseUpdate++;
-                var payload: BABYLONX.UpdateDatabasePayload = {
-                    updatedMeshes: meshes,
-                    updatedGeometries: geometries
-                };
-                var message: BABYLONX.BabylonMessage = {
-                    payload: payload,
-                    taskType: BABYLONX.WorkerTaskType.DB_UPDATE
-                }
-                this._worker.postMessage(message);
-            }
-
-            this._sendOpenDBMessage();
-
             this._worker.onmessage = this._onMessageFromWorker
+
+            if (!transferables) {
+                this._indexedDBPersist = new BABYLONX['IndexedDBPersist'](scene);
+                this._indexedDBPersist.onDatabaseUpdated = (meshes, geometries) => {
+                    if (this._runningDatabaseUpdate > 3) return;
+                    this._runningDatabaseUpdate++;
+                    var payload: BABYLONX.UpdateDatabasePayload = {
+                        updatedMeshes: meshes,
+                        updatedGeometries: geometries
+                    };
+                    var message: BABYLONX.BabylonMessage = {
+                        payload: payload,
+                        taskType: BABYLONX.WorkerTaskType.DB_UPDATE
+                    }
+                    this._worker.postMessage(message);
+                }
+
+                this._sendOpenDBMessage();
+
+            } else {
+
+                this._addUpdateList = {};
+                this._addUpdateListGeometries = {};
+                console.log("registering");
+
+                this._scene.onNewMeshAdded = this._onMeshAdded;
+                this._scene.onMeshRemoved = this._onMeshRemoved;
+                this._scene.onGeometryAdded = this._onGeometryAdded;
+                this._scene.onGeometryRemoved = this._onGeometryRemoved;
+                this._scene.registerAfterRender(this._afterRender);
+                //if (processRegistered) {
+                    //register already-created meshes and geometries
+                    setTimeout(() => {
+                        this._scene.meshes.forEach((node) => {
+                            this._onMeshAdded(node);
+                        });
+                        this._scene.getGeometries().forEach((geometry) => {
+                            this._onGeometryAdded(geometry);
+                        });
+                    });
+                //}
+
+                    var message: BABYLONX.BabylonMessage = {
+                        payload: {},
+                        taskType: BABYLONX.WorkerTaskType.OPEN_DB
+                    }
+                    this._worker.postMessage(message);
+
+            }
+            
         }
 
         public isInitialized() {
             return !!this._init;
+        }
+
+        private _onMeshAdded = (mesh: BABYLON.AbstractMesh) => {
+            mesh.registerAfterWorldMatrixUpdate(this._onMeshUpdated);
+            //console.log("mesh added");
+            this._onMeshUpdated(mesh);
+        }
+
+        private _onMeshRemoved = (mesh: BABYLON.AbstractMesh) => {
+            //this._remvoeList.push(mesh.uniqueId);
+        }
+
+        private _onMeshUpdated = (mesh: BABYLON.AbstractMesh) => {
+            //console.log("mesh updated");
+            this._addUpdateList[mesh.uniqueId] = CollisionHost.SerializeMesh(mesh);
+        }
+
+        private _onGeometryAdded = (geometry: BABYLON.Geometry) => {
+            geometry.onGeometryUpdated = this._onGeometryUpdated;
+            this._onGeometryUpdated(geometry);
+        }
+
+        private _onGeometryRemoved = (geometry: BABYLON.Geometry) => {
+            //this._removeListGeometries.push(geometry.id);
+        }
+
+        private _onGeometryUpdated = (geometry: BABYLON.Geometry) => {
+            this._addUpdateListGeometries[geometry.id] = CollisionHost.SerializeGeometry(geometry);
+        }
+
+        private _afterRender = () => {
+            var payload: BABYLONX.UpdateWithTransferable = {
+                updatedMeshes: this._addUpdateList,
+                updatedGeometries: this._addUpdateListGeometries
+            };
+            var message: BABYLONX.BabylonMessage = {
+                payload: payload,
+                taskType: BABYLONX.WorkerTaskType.DB_UPDATE
+            }
+            var serializable = [];
+            for (var id in payload.updatedGeometries) {
+                if (payload.updatedGeometries.hasOwnProperty(id)) {
+                    serializable.push((<BABYLONX.UpdateWithTransferable> message.payload).updatedGeometries[id].indices.buffer);
+                    serializable.push((<BABYLONX.UpdateWithTransferable> message.payload).updatedGeometries[id].normals.buffer);
+                    serializable.push((<BABYLONX.UpdateWithTransferable> message.payload).updatedGeometries[id].positions.buffer);
+                    serializable.push((<BABYLONX.UpdateWithTransferable> message.payload).updatedGeometries[id].uvs.buffer);
+                }
+            }
+            this._worker.postMessage(message, serializable);
+            this._addUpdateList = {};
+            this._addUpdateListGeometries = {};
+        }
+
+        //TEMP
+        public static SerializeMesh = function (mesh: BABYLON.AbstractMesh): SerializedMesh {
+            var submeshes = [];
+            if (mesh.subMeshes) {
+                submeshes = mesh.subMeshes.map(function (sm, idx) {
+                    return {
+                        position: idx,
+                        verticesStart: sm.verticesStart,
+                        verticesCount: sm.verticesCount,
+                        indexStart: sm.indexStart,
+                        indexCount: sm.indexCount
+                    }
+                });
+            }
+
+            var geometryId = (<BABYLON.Mesh>mesh).geometry ? (<BABYLON.Mesh>mesh).geometry.id : null;
+
+            return {
+                uniqueId: mesh.uniqueId,
+                id: mesh.id,
+                name: mesh.name,
+                geometryId: geometryId,
+                sphereCenter: mesh.getBoundingInfo().boundingSphere.centerWorld.asArray(),
+                sphereRadius: mesh.getBoundingInfo().boundingSphere.radiusWorld,
+                boxMinimum: mesh.getBoundingInfo().boundingBox.minimumWorld.asArray(),
+                boxMaximum: mesh.getBoundingInfo().boundingBox.maximumWorld.asArray(),
+                worldMatrixFromCache: mesh.worldMatrixFromCache.asArray(),
+                subMeshes: submeshes,
+                checkCollisions: mesh.checkCollisions
+            }
+        }
+
+        public static SerializeGeometry = function (geometry: BABYLON.Geometry): SerializedGeometry {
+            return {
+                id: geometry.id,
+                positions: new Float32Array(geometry.getVerticesData(BABYLON.VertexBuffer.PositionKind) || []),
+                normals: new Float32Array(geometry.getVerticesData(BABYLON.VertexBuffer.NormalKind) || []),
+                indices: new Int32Array(geometry.getIndices() || []),
+                uvs: new Float32Array(geometry.getVerticesData(BABYLON.VertexBuffer.UVKind) || [])
+            }
         }
 
         private initSceneFunctions() {
@@ -202,15 +329,15 @@ module BABYLONX {
 
     export interface SerializedGeometry {
         id: string;
-        positions: Array<number>;
-        indices: Array<number>;
-        normals: Array<number>;
-        uvs?: Array<number>;
+        positions: Float32Array;
+        indices: Int32Array;
+        normals: Float32Array;
+        uvs?: Float32Array;
     }
 
     export interface BabylonMessage {
         taskType: WorkerTaskType;
-        payload: OpenDatabasePayload|CollidePayload|UpdateDatabasePayload /*any for TS under 1.4*/;
+        payload: InitPayload|CollidePayload|UpdatePayload /*any for TS under 1.4*/;
     }
 
     export interface SerializedColliderToWorker {
@@ -231,7 +358,11 @@ module BABYLONX {
         collidedMeshUniqueId: number;
     }
 
-    export interface OpenDatabasePayload {
+    export interface InitPayload {
+
+    }
+
+    export interface OpenDatabasePayload extends InitPayload {
         dbName: string;
         dbVersion: number;
         objectStoreNameMeshes: string;
@@ -245,9 +376,18 @@ module BABYLONX {
         excludedMeshUniqueId?: number;
     }
 
-    export interface UpdateDatabasePayload {
+    export interface UpdatePayload {
+
+    }
+
+    export interface UpdateDatabasePayload extends UpdatePayload {
         updatedMeshes: Array<number>;
         updatedGeometries: Array<string>;
+    }
+
+    export interface UpdateWithTransferable extends UpdatePayload {
+        updatedMeshes: { [n: number]: SerializedMesh; };
+        updatedGeometries: { [s: string]: SerializedGeometry; };
     }
 
     export enum WorkerTaskType {

@@ -11,7 +11,17 @@ var worker: Worker;
 //    if (worker)
 //        worker.postMessage({ position: this._scaledPosition.initialPosition.asArray(), velocity: this._scaledVelocity.initialVelocity.asArray(), radius: colliderRadius.asArray(), maximumRetry: maximumRetry, finalPosition: finalPosition.asArray(), excludedMesh: excludedMesh ? excludedMesh.id : null });
 //}
-
+function getUrlParameter(sParam) {
+    var sPageURL = window.location.search.substring(1);
+    var sURLVariables = sPageURL.split('&');
+    for (var i = 0; i < sURLVariables.length; i++) {
+        var sParameterName = sURLVariables[i].split('=');
+        if (sParameterName[0] == sParam) {
+            return sParameterName[1];
+        }
+    }
+    return null;
+}
 window.onload = () => {
     var canvas = <HTMLCanvasElement> document.getElementById("renderCanvas");
     var engine = new BABYLON.Engine(canvas, true);
@@ -21,6 +31,7 @@ window.onload = () => {
         //registerIndexedDBCallbacks(scene);
         //Camera
         var camera = new BABYLON.FreeCamera("Camera", BABYLON.Vector3.Zero(), scene);
+        camera.ellipsoid = new BABYLON.Vector3(1.5, 1.5, 1.5);
         camera.attachControl(canvas, true);
         camera.checkCollisions = true;
         //Setting up the light
@@ -46,6 +57,10 @@ window.onload = () => {
         cylinder.position.z = -10;
         torus.position.x = 10;
         knot.position.y = -10;
+
+        scene.meshes.forEach(function (m) {
+            m.checkCollisions = true;
+        });
 
         return scene;
     }
@@ -81,6 +96,7 @@ window.onload = () => {
             //Simple crate
             var box2 = BABYLON.Mesh.CreateBox("crate2", 2, scene);
             box2.position = new BABYLON.Vector3(0, -9, -10);
+            box2.ellipsoid = new BABYLON.Vector3(1, 1, 1);
 
             //Set gravity for the scene (G force like, on Y-axis)
             scene.gravity = new BABYLON.Vector3(0, -0.9, 0);
@@ -90,7 +106,7 @@ window.onload = () => {
 
             //Then apply collisions and gravity to the active camera
             camera.checkCollisions = true;
-            //camera.applyGravity = true;
+            camera.applyGravity = true;
 
             //Set the ellipsoid around the camera (e.g. your player's size)
             camera.ellipsoid = new BABYLON.Vector3(1, 1, 1);
@@ -98,20 +114,52 @@ window.onload = () => {
             //finally, say which mesh will be collisionable
             ground.checkCollisions = true;
             box.checkCollisions = true;
+            box2.checkCollisions = true;
+
+            scene.beforeRender = function () {
+                if (collisionHost.isInitialized()) {
+                    var mesh = scene.getMeshByName("crate2");
+                    mesh.moveWithCollisions(new BABYLON.Vector3(0.1, 0, 0));
+                }
+            }
 
             return scene;
         //}
     }
 
-    scene = createScene2();
-    scene.collisionsEnabled = true;
-    //scene.debugLayer.show();
+    var createScene3 = function () {
+        var scene = new BABYLON.Scene(engine);
 
-    scene.meshes.forEach(function (m) {
-        m.checkCollisions = true;
-    });
+        var camera = new BABYLON.FreeCamera("Camera", new BABYLON.Vector3(-20, 0, -20), scene);
+        camera.attachControl(canvas, true);
+        camera.checkCollisions = true;
+        camera.ellipsoid = new BABYLON.Vector3(1, 1, 1);
+        //Setting up the light
+        var light = new BABYLON.HemisphericLight("Hemispheric", new BABYLON.Vector3(0, 1, 0), scene);
+
+        BABYLON.SceneLoader.Append("scenes/V8/", "v8.babylon", scene, function () {
+            scene.activeCamera = camera;
+            scene.meshes.forEach(function (m) {
+                if ((<BABYLON.Mesh>m).geometry) {
+                    m.checkCollisions = true;
+                }
+            });
+        });
+
+        return scene;
+    }
+
+    if (getUrlParameter("scene") == "complex") {
+        scene = createScene3();
+    } else if (getUrlParameter("scene") == "gravity") {
+        scene = createScene2();
+    } else {
+        scene = createScene();
+    }
 
     
+    scene.collisionsEnabled = true;
+    scene.debugLayer.show();    
 
     engine.runRenderLoop(function () {
         scene.render();
@@ -129,12 +177,7 @@ window.onload = () => {
     //    box.checkCollisions = true;
     //}
 
-    var collisionHost = new BABYLONX.CollisionHost(scene);
+    var collisionHost = new BABYLONX.CollisionHost(scene, true);
 
-    scene.beforeRender = function () {
-        if (collisionHost.isInitialized()) {
-            var mesh = scene.getMeshByName("crate2");
-            mesh.moveWithCollisions(new BABYLON.Vector3(0.1, 0, 0));
-        }
-    }
+    
 };
